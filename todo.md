@@ -27,3 +27,4 @@ zone grid collapses to one column in a narrow panel
 tri-state zone layer checkbox: on / off / "-" (mixed zone selection)
 tri-state "all" master toggle for the environmental impact groups
 viewport culling in the canvas draw loop
+shareable view state (toggles, zones, opacities) in the URL hash

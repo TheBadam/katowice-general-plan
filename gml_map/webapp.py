@@ -297,6 +297,44 @@ function hatchPattern(color, widthPx, spacingPx) {
   pat.setTransform(ctx.getTransform().inverse());
   return pat;
 }
+// --- shareable view state in the URL hash ---------------------------
+// Serializes group/zone toggles and opacities into location.hash so a
+// view can be shared by copying the URL. replaceState avoids history spam.
+let saveTimer = null;
+function saveState() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    const out = {};
+    for (const name in state) {
+      const s = state[name];
+      const e = {on: s.on ? 1 : 0, a: s.alpha};
+      if (s.zones) {  // list only the disabled zone types
+        const off = Object.keys(s.zones).filter(k => !s.zones[k]);
+        e.z = off.join(',');
+      }
+      out[name] = e;
+    }
+    history.replaceState(null, '',
+      '#s=' + encodeURIComponent(JSON.stringify(out)));
+  }, 200);
+}
+function loadState() {
+  const m = location.hash.match(/^[#&]s=([^&]+)/);
+  if (!m) return;
+  let data;
+  try { data = JSON.parse(decodeURIComponent(m[1])); }
+  catch (err) { return; }
+  for (const name in data) {
+    const s = state[name], d = data[name];
+    if (!s || typeof d !== 'object') continue;
+    if (typeof d.on === 'number') s.on = !!d.on;
+    if (typeof d.a === 'number' && d.a >= 0.05 && d.a <= 1) s.alpha = d.a;
+    if (s.zones && typeof d.z === 'string') {
+      const off = d.z ? d.z.split(',') : [];
+      for (const k in s.zones) s.zones[k] = !off.includes(k);
+    }
+  }
+}
 function initGroups() {
   for (const g of DATA.groups) {
     groups[g.name] = g;
@@ -523,7 +561,7 @@ function swatchBackground(g) {
 }
 function groupBlock(g, counts) {
   const st = state[g.name];
-  const on = g.on !== false;
+  const on = st.on;
   if (g.name === 'streets') counts[g.name] = streets.length;
   const range = (attr, label, min, max, step, val) =>
     '<input type="range" min="' + min + '" max="' + max + '" step="' + step +
@@ -587,6 +625,7 @@ function buildPanel() {
       }
       document.getElementById('grp-' + el.dataset.toggle).classList.toggle('off', !el.checked);
       draw();
+      saveState();
     });
   });
   document.querySelectorAll('[data-zone]').forEach(el => {
@@ -605,6 +644,7 @@ function buildPanel() {
       master.indeterminate = !all && !none;
       card.classList.toggle('off', none);
       draw();
+      saveState();
     });
   });
   // section master: tri-state switch for all impact groups, mirroring
@@ -627,17 +667,30 @@ function buildPanel() {
           .classList.toggle('off', !secMaster.checked);
       });
       draw();
+      saveState();
     });
     groupToggles().forEach(el =>
       el.addEventListener('change', syncMaster));
     syncMaster();
   }
+  // zone-layer master checkboxes start consistent with their zone states
+  // (covers both fresh loads and views restored from the URL hash)
+  document.querySelectorAll('[data-toggle]').forEach(el => {
+    const s = state[el.dataset.toggle];
+    if (s && s.zones) {
+      const vals = Object.values(s.zones);
+      const all = vals.every(Boolean), none = vals.every(v => !v);
+      el.checked = all;
+      el.indeterminate = !all && !none;
+    }
+  });
   document.querySelectorAll('[data-alpha]').forEach(el => {
     el.addEventListener('input', () => {
       state[el.dataset.alpha].alpha = parseFloat(el.value);
       el.parentElement.querySelector('.hint').textContent =
         el.dataset.label + ' ' + el.value;
       draw();
+      saveState();
     });
   });
 }
@@ -676,6 +729,7 @@ async function load() {
     document.getElementById('notetext').textContent = DATA.note;
   }
   initGroups();
+  loadState();  // restore a shared view from the URL hash, if any
   for (const f of DATA.features) paths.push(makePath(f));
   if (DATA.streets) {
     for (const s of DATA.streets) {
