@@ -95,7 +95,25 @@ _INTERACTIVE_HTML = r"""<!DOCTYPE html>
 <style>
   html, body { margin: 0; height: 100%; font-family: system-ui, sans-serif;
                overflow: hidden; }
-  #wrap { display: flex; height: 100%; }
+  body { display: flex; flex-direction: column; }
+  #topbar { flex: none; display: flex; align-items: center; gap: 10px;
+            padding: 8px 12px; background: #fff;
+            border-bottom: 1px solid #ddd; }
+  #titles { flex: 1; min-width: 0; }
+  #topbar h1 { font-size: 15px; font-weight: 600; margin: 0;
+               line-height: 1.4; }
+  #psubtitle { font-size: 12px; color: #555; margin-top: 2px;
+               line-height: 1.4; }
+  #paneltoggle { width: 15px; flex: none; border: none;
+                 border-left: 1px solid #ccc; background: #f7f7f7;
+                 cursor: pointer; padding: 0; display: flex;
+                 align-items: center; justify-content: center; }
+  #paneltoggle:hover { background: #e8e8e8; }
+  #paneltoggle svg { width: 8px; height: 12px; display: block;
+                     transition: transform 0.15s; }
+  #paneltoggle path { fill: none; stroke: #555; stroke-width: 2; }
+  #paneltoggle.closed svg { transform: rotate(180deg); }
+  #wrap { display: flex; flex: 1; min-height: 0; }
   #canvas { flex: 1; display: block; cursor: grab; min-width: 0; }
   #canvas.dragging { cursor: grabbing; }
   #resizer { width: 6px; flex: none; cursor: col-resize;
@@ -104,7 +122,6 @@ _INTERACTIVE_HTML = r"""<!DOCTYPE html>
   #panel { width: 300px; flex: none; background: #f7f7f7;
            border-left: 1px solid #ccc; overflow-y: auto; padding: 10px;
            font-size: 13px; box-sizing: border-box; }
-  #panel h3 { margin: 2px 0 10px; font-size: 14px; word-break: break-word; }
   .group { margin-bottom: 10px; padding: 6px 8px; border: 1px solid #ddd;
            border-radius: 6px; background: #fff; }
   .group.off { opacity: 0.45; }
@@ -132,13 +149,19 @@ _INTERACTIVE_HTML = r"""<!DOCTYPE html>
   .src { color: #777; font-size: 11px; margin: -6px 0 8px;
          word-break: break-word; }
   .lang { margin: -4px 0 8px; font-size: 12px; }
-  .lang a { color: #0366d6; margin-right: 10px; font-weight: 600; }
-  .lang a.cur { color: #000; pointer-events: none; }
+  #langsel a { color: #0366d6; margin: 0 10px 0 0; font-weight: 600;
+               display: inline-block; }
+  #langsel a.cur { color: #000; pointer-events: none; }
+  .plabel { color: #555; font-size: 10.5px; text-transform: uppercase;
+            letter-spacing: 0.04em; }
+  .lang .plabel { margin-right: 8px; }
+  .plinks .plabel { display: block; margin-bottom: 3px; }
+
   .sechead { margin: 14px 0 6px; font-size: 11px; text-transform: uppercase;
              letter-spacing: 0.04em; color: #555;
              border-bottom: 1px solid #ddd; padding-bottom: 3px; }
   .plinks { margin: 0 0 8px; font-size: 12px; }
-  .plinks a { color: #0366d6; display: inline-block; margin: 0 10px 4px 0; }
+  #plinks a { color: #0366d6; display: inline-block; margin: 0 10px 4px 0; }
   .note { margin: 0 0 12px; font-size: 12px; color: #444; }
   .note summary { cursor: pointer; color: #0366d6; font-weight: 600; }
   .note div { margin-top: 6px; line-height: 1.5; white-space: normal; }
@@ -148,15 +171,20 @@ _INTERACTIVE_HTML = r"""<!DOCTYPE html>
           max-width: 280px; white-space: normal;
           box-shadow: 2px 2px 6px #0003; }
   #info .desc { color: #555; margin-top: 3px; display: block; }
-  #help { color: #777; font-size: 11px; margin-top: 8px; line-height: 1.5; }
 </style>
 </head>
 <body>
+<div id="topbar">
+  <div id="titles">
+    <h1 id="ptitle">Loading...</h1>
+    <div id="psubtitle" style="display:none"></div>
+  </div>
+</div>
 <div id="wrap">
   <canvas id="canvas"></canvas>
   <div id="resizer" title="drag to resize panel"></div>
+  <button id="paneltoggle" title="toggle panel"><svg viewBox="0 0 8 12"><path d="M1 1l6 5-6 5"/></svg></button>
   <div id="panel">
-    <h3 id="ptitle">Loading...</h3>
     <div class="lang" id="langsel"></div>
     <div class="src" id="psrc"></div>
     <div class="plinks" id="plinks"></div>
@@ -172,9 +200,6 @@ _INTERACTIVE_HTML = r"""<!DOCTYPE html>
       <button id="png"></button>
     </div>
     __CLASSIC_LINK__
-    <label style="display:block;margin:10px 0 0;font-size:12px;">
-      <input type="checkbox" id="lbls" checked> <span id="lblname"></span></label>
-    <div id="help"></div>
   </div>
 </div>
 <div id="info"></div>
@@ -189,19 +214,19 @@ const I18N = {
   en: {
     secLayers: 'GML layers', secGroups: 'Environmental impact',
     secStreets: 'Streets', opacity: 'opacity', details: 'details',
+    language: 'Language', links: 'Links',
     zoomIn: 'Zoom in', zoomOut: 'Zoom out', reset: 'Reset view',
-    png: 'Download PNG', streetNames: 'street names',
+    png: 'Download PNG',
     explanation: 'Explanation',
-    help: 'hover = details, drag = pan, wheel = zoom,<br>click = pin details, Esc = unpin',
     layer: 'layer', group: 'group', symbol: 'symbol', data: 'data: '
   },
   pl: {
     secLayers: 'Warstwy GML', secGroups: 'Oddziaływanie na środowisko',
     secStreets: 'Ulice', opacity: 'przezroczystość', details: 'szczegóły',
+    language: 'Język', links: 'Linki',
     zoomIn: 'Przybliż', zoomOut: 'Oddal', reset: 'Resetuj widok',
-    png: 'Pobierz PNG', streetNames: 'nazwy ulic',
+    png: 'Pobierz PNG',
     explanation: 'Wyjaśnienie',
-    help: 'najedź = szczegóły, przeciągnij = przesuwanie, kółko myszy = zoom,<br>klik = przypnij szczegóły, Esc = odpij',
     layer: 'warstwa', group: 'grupa', symbol: 'symbol', data: 'dane: '
   }
 };
@@ -212,7 +237,7 @@ const info = document.getElementById('info');
 let DATA = null, paths = [], streets = [], groups = {};
 const state = {};   // group name -> {on, alpha}
 const view = {s: 1, tx: 0, ty: 0};
-let dpr = 1, labelsOn = true;
+let dpr = 1;
 // hatch configuration for overlay groups: app-level only (from mapdata),
 // no UI. width/spacing in CSS px; fill = opacity of the solid color
 // between the hatch lines (0 = transparent).
@@ -393,7 +418,7 @@ function draw() {
     for (const s of streets) ctx.stroke(s.p);
   }
   ctx.globalAlpha = 1;
-  if (stS && stS.on && labelsOn) drawStreetLabels();
+  if (stS && stS.on) drawStreetLabels();
 }
 function drawStreetLabels() {
   // draw in CSS pixels: scale the backing store by dpr (devicePixelRatio)
@@ -475,10 +500,12 @@ function groupBlock(g, counts) {
     '<div class="head">' +
     '<input type="checkbox"' + (on ? ' checked' : '') + ' data-toggle="' + esc(g.name) + '">' +
     '<span class="swatch" style="background:' + swatchBackground(g) + '"></span>' +
-    '<label>' + esc(g.name) +
+    '<label>' + esc(g.label || g.name) +
     ' <span class="cnt">' + (counts[g.name] || 0) + '</span></label></div>' +
     (g.desc_title ? '<div class="gtitle">' + esc(g.desc_title) + '</div>' : '') +
-    range('alpha', L.opacity, '0.05', '1', '0.01', st.alpha) +
+    // streets are toggle-only; everything else keeps the opacity slider
+    (g.kind === 'streets' ? '' :
+      range('alpha', L.opacity, '0.05', '1', '0.01', st.alpha)) +
     (g.desc ? '<details class="gdetails"><summary>' + L.details + '</summary><div>' +
       esc(g.desc) + '</div></details>' : '') +
     '</div>';
@@ -494,8 +521,9 @@ function buildPanel() {
   const secs = { layer: [], group: [], streets: [] };
   for (const g of DATA.groups) secs[g.kind || 'group'].push(g);
   let html = '';
-  for (const sec of [[L.secLayers, secs.layer],
-                     [L.secGroups, secs.group],
+  // sections: environmental impact on top, then GML layers, streets last
+  for (const sec of [[L.secGroups, secs.group],
+                     [L.secLayers, secs.layer],
                      [L.secStreets, secs.streets]]) {
     if (!sec[1].length) continue;
     html += '<h4 class="sechead">' + esc(sec[0]) + '</h4>';
@@ -517,11 +545,6 @@ function buildPanel() {
       draw();
     });
   });
-  const lbls = document.getElementById('lbls');
-  if (lbls) {
-    lbls.checked = labelsOn;
-    lbls.addEventListener('change', () => { labelsOn = lbls.checked; draw(); });
-  }
 }
 async function load() {
   const res = await fetch(MAPDATA_URL);
@@ -529,16 +552,19 @@ async function load() {
   if (DATA.hatch) HATCH = Object.assign(HATCH, DATA.hatch);
   document.title = DATA.page_title || DATA.title;
   document.getElementById('ptitle').textContent = DATA.page_title || DATA.title;
+  const pst = DATA.page_subtitle || '';
+  const psub = document.getElementById('psubtitle');
+  psub.textContent = pst;
+  psub.style.display = pst ? 'block' : 'none';
   document.getElementById('zoomin').textContent = L.zoomIn;
   document.getElementById('zoomout').textContent = L.zoomOut;
   document.getElementById('fitbtn').textContent = L.reset;
   document.getElementById('png').textContent = L.png;
-  document.getElementById('lblname').textContent = L.streetNames;
-  document.getElementById('help').innerHTML = L.help;
   document.getElementById('notesum').textContent = L.explanation;
   const ls = document.getElementById('langsel');
   const lb = langMatch ? '../' : '';
-  ls.innerHTML = '<a href="' + lb + 'en/"' +
+  ls.innerHTML = '<span class="plabel">' + esc(L.language) + '</span>' +
+    '<a href="' + lb + 'en/"' +
     (LANG === 'en' ? ' class="cur"' : '') + '>EN</a>' +
     '<a href="' + lb + 'pl/"' + (LANG === 'pl' ? ' class="cur"' : '') + '>PL</a>';
   if (DATA.src) {
@@ -546,6 +572,7 @@ async function load() {
   }
   if (DATA.links && DATA.links.length) {
     document.getElementById('plinks').innerHTML =
+      '<span class="plabel">' + esc(L.links) + '</span>' +
       DATA.links.map(l => '<a href="' + esc(l.url) +
         '" target="_blank" rel="noopener">' + esc(l.name) + '</a>').join('');
   }
@@ -634,6 +661,16 @@ window.addEventListener('mouseup', e => {
 const panel = document.getElementById('panel');
 const resizer = document.getElementById('resizer');
 let resizing = null, sizeRaf = null;
+// collapsible panel: the toggle sits on the panel's left edge and
+// stays visible when the panel is hidden
+const panelToggle = document.getElementById('paneltoggle');
+panelToggle.addEventListener('click', () => {
+  const show = panel.style.display === 'none';
+  panel.style.display = show ? '' : 'none';
+  resizer.style.display = show ? '' : 'none';
+  panelToggle.classList.toggle('closed', !show);
+  resize();
+});
 try {
   const saved = localStorage.getItem('panelWidth');
   if (saved) panel.style.width = Math.min(600, Math.max(200, +saved)) + 'px';
@@ -815,8 +852,10 @@ def _flatten_geom(geom: BaseGeometry):
 def build_map_payload(features, schema, prop, zone_mapping,
                       title, srs=None, resolve_key=None, streets=None,
                       overlay=False, descriptions=None,
-                      page_title=None, note=None, links=None, src=None,
-                      default_off=None, zone_definition=None, hatch=None):
+                      page_title=None, page_subtitle=None, note=None,
+                      links=None, src=None,
+                      default_off=None, zone_definition=None, hatch=None,
+                      default_alpha=None, layer_names=None):
     """Build the JSON payload for the interactive canvas viewer.
 
     `resolve_key(value) -> schema key or None` decides the group of a feature
@@ -826,20 +865,24 @@ def build_map_payload(features, schema, prop, zone_mapping,
     individually controllable base layers and groups are painted on top;
     if False, groups replace the colors.
     `descriptions`: optional {group name: description text} shown in the UI.
+    `default_alpha`: optional {group/layer name: opacity 0..1} setting
+    the initial position of the per-group opacity slider.
+    `layer_names`: optional {raw layer name: display name}; the key order
+    sets the display order of the layer controls in the viewer panel.
     `hatch`: app-level hatch config for overlay groups (no UI control):
     {"width": line thickness in px, "spacing": line distance in px,
     "fill": opacity 0..1 of the solid color between the lines}. Defaults
-    to the reserved "global_hatch" entry of `zone_definition`, which
-    names the fill opacity "alpha".
+    to the reserved "global_hatch" entry of `schema` (the group-definitions
+    file), which names the fill opacity "alpha".
     """
     if resolve_key is None:
         raise ValueError("resolve_key callback is required")
 
-    src = hatch or (zone_definition or {}).get("global_hatch") or {}
+    hcfg = hatch or (schema or {}).get("global_hatch") or {}
     hatch = {
-        "width": float(src.get("width", 2.5)),
-        "spacing": float(src.get("spacing", 16.0)),
-        "fill": float(src.get("alpha", src.get("fill", 0.0))),
+        "width": float(hcfg.get("width", 2.5)),
+        "spacing": float(hcfg.get("spacing", 16.0)),
+        "fill": float(hcfg.get("alpha", hcfg.get("fill", 0.0))),
     }
     if hatch["width"] <= 0 or hatch["spacing"] <= 0:
         raise ValueError("hatch width and spacing must be positive")
@@ -850,21 +893,30 @@ def build_map_payload(features, schema, prop, zone_mapping,
         # the original per-layer colors form individually controllable
         # base layers; groups are painted on top as overlays
         cmap = mpl.colormaps["tab20"]
-        layer_names = sorted({f.layer for f in features}, key=str.lower)
+        raw = sorted({f.layer for f in features}, key=str.lower)
+        lname = layer_names or {}
+        # mapped layers first, in the file's key order; the rest after
+        layer_order = [n for n in lname if n in raw] + \
+                      [n for n in raw if n not in lname]
         base_color = {n: mpl.colors.to_hex(cmap(i % 20))
-                      for i, n in enumerate(layer_names)}
-        groups = [{"name": n, "color": base_color[n],
-                   "edge": _darken(base_color[n]), "alpha": 0.62,
-                   "kind": "layer"}
-                  for n in layer_names]
-        groups += [{"name": k, "color": v, "edge": _darken(v), "alpha": 1.0,
-                    "kind": "group"}
-                   for k, v in schema.items() if k != "_default"]
+                      for i, n in enumerate(layer_order)}
+        dalpha = default_alpha or {}
+        groups = [{"name": n, "label": lname.get(n, n),
+                   "color": base_color[n],
+                   "edge": _darken(base_color[n]),
+                   "alpha": dalpha.get(n, 0.62), "kind": "layer"}
+                  for n in layer_order]
+        groups += [{"name": k, "color": v, "edge": _darken(v),
+                    "alpha": dalpha.get(k, 1.0), "kind": "group"}
+                   for k, v in schema.items()
+                   if k not in ("_default", "global_hatch")]
         color_by_group = {g["name"]: g["color"] for g in groups}
     else:
-        groups = [{"name": k, "color": v, "edge": _darken(v), "alpha": 0.62,
-                    "kind": "group"}
-                   for k, v in schema.items() if k != "_default"]
+        dalpha = default_alpha or {}
+        groups = [{"name": k, "color": v, "edge": _darken(v),
+                   "alpha": dalpha.get(k, 0.62), "kind": "group"}
+                   for k, v in schema.items()
+                   if k not in ("_default", "global_hatch")]
         default_color = schema.get("_default", "#dddddd")
         groups.append({"name": "other", "color": default_color,
                        "edge": _darken(default_color), "alpha": 0.62,
@@ -1012,6 +1064,7 @@ def build_map_payload(features, schema, prop, zone_mapping,
 
     payload["bounds"] = [0, 0, round(xmax - ox, 2), round(ymax - oy, 2)]
     payload["page_title"] = page_title or title
+    payload["page_subtitle"] = page_subtitle or ""
     payload["src"] = src or title
     payload["note"] = note or ""
     payload["links"] = links or []

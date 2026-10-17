@@ -101,7 +101,7 @@ other path - use the EN/PL switcher in the panel to move between them:
 
 ```bash
 .venv/bin/python gml_viewer.py plan.gml --zones zones.json \
-    --colors colors_oznaczenia.json --overlay --streets streets.geojson \
+    --colors group_definitions.json --overlay --streets streets.geojson \
     --descriptions zones_description.json \
     --page-title "Environmental impact on Katowice plan" \
     --page-note page_note.txt \
@@ -143,7 +143,7 @@ custom canvas viewer with per-group controls:
 
 ```bash
 .venv/bin/python gml_viewer.py plan.gml --zones zones.json \
-    --colors colors_oznaczenia.json --web
+    --colors group_definitions.json --web
 ```
 
 ### Street names overlay
@@ -165,7 +165,7 @@ street is long enough at the current zoom).
 
 ```bash
 .venv/bin/python gml_viewer.py plan.gml --zones zones.json \
-    --colors colors_oznaczenia.json --streets streets.geojson --web
+    --colors group_definitions.json --streets streets.geojson --web
 ```
 
 The streets file is plain GeoJSON (LineString/MultiLineString with a `name`
@@ -238,17 +238,21 @@ Combine a group definition file with a group color schema:
 
 ```bash
 .venv/bin/python gml_viewer.py katowice_plan_ogolny_26.gml \
-    --zones zones.json --colors colors_oznaczenia.json
+    --zones zones.json --colors group_definitions.json
 ```
 
 - `zones.json` holds groups (A, B, C, D), each a list of objects with a
   `name` and `zones`: an array of individual oznaczenia
   (`["1SU", "2SU", "254SU"]`, numerically sorted). A comma-separated
   string is also accepted for backward compatibility.
-- `colors_oznaczenia.json` holds only group colors:
+- `group_definitions.json` holds the group colors, the `_default` color
+  for ungrouped oznaczenia, and the optional `global_hatch` configuration
+  of the overlay hatch (line width and spacing in px; `alpha` is the
+  opacity of the solid color between the hatch lines):
 
 ```json
 {
+  "global_hatch": {"width": 5, "spacing": 20, "alpha": 0.7},
   "A": "#4daf4a",
   "B": "#ff7f00",
   "C": "#377eb8",
@@ -259,6 +263,15 @@ Combine a group definition file with a group color schema:
 
 Oznaczenia not listed in any group (and features without `oznaczenie`, e.g.
 the plan boundary) fall back to `_default`.
+- `layer_names.json` maps raw GML layer names to display names in the viewer
+  panel; the key order sets the order of the layer controls:
+
+```json
+{
+  "StrefaPlanistyczna": "Strefa planistyczna",
+  "ObszarUzupelnieniaZabudowy": "Obszar uzupełnienia zabudowy"
+}
+```
 
 **Overlay mode.** By default the group colors *replace* the original
 rendering, and `_default`-colored "other" covers everything not in a group.
@@ -270,7 +283,7 @@ fadeable base layer, with the A-D group overlays on top:
 
 ```bash
 .venv/bin/python gml_viewer.py plan.gml --zones zones.json \
-    --colors colors_oznaczenia.json --overlay --web
+    --colors group_definitions.json --overlay --web
 ```
 
 **Group descriptions.** `--descriptions zones_description.json` adds a

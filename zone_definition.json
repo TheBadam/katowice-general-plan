@@ -1,5 +1,4 @@
 {
-  "global_hatch": {"width": 5, "spacing": 20, "alpha": 0.7},
   "SN": {"title": "Strefy zieleni i rekreacji", "color": "#4daf4a", "stroke": "#191919", "alpha": 1.0},
   "SO": {"title": "strefy otwarte", "color": "#a6d854", "stroke": "#191919", "alpha": 1.0},
   "SC": {"title": "Strefy cmentarzy", "color": "#999999", "stroke": "#191919", "alpha": 1.0},

@@ -161,7 +161,13 @@ def write_geojson(layers, path):
 
 
 def load_color_schema(path):
-    """Load a JSON color schema: {"value": "color", ..., "_default": "color"}."""
+    """Load a JSON group-definitions file (e.g. group_definitions.json).
+
+    Maps group -> color, plus the optional "_default" color for unmatched
+    values and the optional "global_hatch" app-level hatch configuration
+    of overlay groups: {"width": px, "spacing": px, "alpha": 0..1}, where
+    alpha is the opacity of the fill between the hatch lines.
+    """
     import json
     from matplotlib.colors import to_rgb
     try:
@@ -171,11 +177,29 @@ def load_color_schema(path):
     if not isinstance(data, dict) or not data:
         sys.exit(f"Error: {path} must contain a JSON object "
                  '{"value": "color", ...}')
+    hatch = data.get("global_hatch")
+    if hatch is not None:
+        if not isinstance(hatch, dict):
+            sys.exit(f"Error: {path}: global_hatch must be an object")
+        for k in ("width", "spacing"):
+            v = hatch.get(k)
+            if v is not None and (not isinstance(v, (int, float))
+                                  or not v > 0):
+                sys.exit(f"Error: {path}: global_hatch {k} must be a "
+                         "positive number")
+        a = hatch.get("alpha")
+        if a is not None and (not isinstance(a, (int, float))
+                              or not 0 <= a <= 1):
+            sys.exit(f"Error: {path}: global_hatch alpha must be a "
+                     "number in [0, 1]")
     for key, color in data.items():
+        if key == "global_hatch":
+            continue
         try:
             to_rgb(color)
         except (ValueError, TypeError):
-            sys.exit(f"Error: {path}: invalid color for key {key!r}: {color!r}")
+            sys.exit(f"Error: {path}: invalid color for key {key!r}: "
+                     f"{color!r}")
     return data
 
 
@@ -233,7 +257,8 @@ def make_color_fn(schema, prop, zone_mapping=None, overlay=False):
         return to_rgb(schema[key]) if key is not None else None
 
     def report():
-        keys = [k for k in schema if k != "_default"]
+        keys = [k for k in schema
+                if k not in ("_default", "global_hatch")]
         print(f"\nColor schema (prop={prop}): {stats['matched']} features matched")
         for k in keys:
             n = stats["per_key"].get(k, 0)
@@ -293,11 +318,8 @@ def load_streets(path):
 def load_zone_definition(path):
     """Load zone_definition.json: {symbol: {"title", "color", "stroke"}}.
 
-    The optional per-symbol "alpha" (0..1) is a zone's initial fill
-    transparency; the viewer's opacity slider scales this level.
-    The reserved "global_hatch" key is the app-level hatch configuration
-    of overlay groups: {"width": px, "spacing": px, "alpha": 0..1}, where
-    alpha is the opacity of the fill between the hatch lines.
+    The optional "alpha" (0..1) is a zone's initial fill transparency;
+    the viewer's opacity slider scales this level.
     """
     from matplotlib.colors import to_rgb
     try:
@@ -308,21 +330,6 @@ def load_zone_definition(path):
         sys.exit(f"Error: {path} must map symbols to "
                  '{"title": ..., "color": ..., "stroke": ...}')
     for sym, z in data.items():
-        if sym == "global_hatch":  # app-level hatch config, not a zone
-            if not isinstance(z, dict):
-                sys.exit(f"Error: {path}: global_hatch must be an object")
-            for k in ("width", "spacing"):
-                v = z.get(k)
-                if v is not None and (not isinstance(v, (int, float))
-                                      or not v > 0):
-                    sys.exit(f"Error: {path}: global_hatch {k} must be a "
-                             "positive number")
-            a = z.get("alpha")
-            if a is not None and (not isinstance(a, (int, float))
-                                  or not 0 <= a <= 1):
-                sys.exit(f"Error: {path}: global_hatch alpha must be a "
-                         "number in [0, 1]")
-            continue
         if not isinstance(z, dict) or "title" not in z or "color" not in z:
             sys.exit(f"Error: {path}: entry {sym!r} needs title and color")
         try:
@@ -334,6 +341,25 @@ def load_zone_definition(path):
         if not isinstance(alpha, (int, float)) or not 0 <= alpha <= 1:
             sys.exit(f"Error: {path}: entry {sym!r} alpha must be "
                      "a number in [0, 1]")
+    return data
+
+
+def load_layer_names(path):
+    """Load layer_names.json: {raw layer name: display name}.
+
+    The key order also sets the display order of the layer controls in
+    the interactive viewer; layers absent from the file come last,
+    alphabetically.
+    """
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        sys.exit(f"Error: cannot load {path}: {e}")
+    if not isinstance(data, dict) or not all(
+            isinstance(k, str) and isinstance(v, str) and v.strip()
+            for k, v in data.items()):
+        sys.exit(f"Error: {path} must map layer names to display names "
+                 '{"StrefaPlanistyczna": "Strefa planistyczna", ...}')
     return data
 
 
@@ -356,9 +382,11 @@ def main(argv=None):
     p.add_argument("--label", metavar="PROP",
                    help="annotate polygons with the value of property PROP")
     p.add_argument("--colors", metavar="JSON",
-                   help="JSON color schema; with --zones: group->color "
-                        "(e.g. {'A': '#377eb8'}); without: oznaczenie/symbol "
-                        "code -> color, plus optional '_default'")
+                   help="JSON group definitions (e.g. group_definitions.json):"
+                        " group->color (or oznaczenie/symbol code->color "
+                        "without --zones), plus optional '_default' and "
+                        "'global_hatch' (overlay hatch config: width, "
+                        "spacing, alpha)")
     p.add_argument("--zones", metavar="JSON",
                    help="JSON group definitions: {group: [{'name': ..., "
                         "'zones': '1SU, 2SU, ...'}]}; groups are colored "
@@ -373,6 +401,9 @@ def main(argv=None):
     p.add_argument("--page-title", metavar="TEXT",
                    help="page title in the browser tab and the viewer "
                         "panel header")
+    p.add_argument("--page-subtitle", metavar="TEXT",
+                   help="smaller subtitle line under the page title in "
+                        "the viewer header")
     p.add_argument("--page-note", metavar="FILE",
                    help="plain text file shown on the page in a collapsible "
                         "'Explanation' block (methodology, sources...)")
@@ -384,10 +415,19 @@ def main(argv=None):
                    metavar="GROUP",
                    help="layer/group shown unchecked by default in the "
                         "interactive viewer (repeatable, exact name)")
+    p.add_argument("--default-alpha", action="append", default=[],
+                   metavar="NAME=ALPHA",
+                   help="initial opacity (0-1) of a layer/group's slider "
+                        "in the interactive viewer (repeatable), e.g. "
+                        "--default-alpha StrefaPlanistyczna=0.75")
     p.add_argument("--zone-definition", metavar="JSON",
                    help="zone_definition.json: paint zone-type features "
                         "(matched by the 'symbol' property) with their "
                         "fill color and stroke (border) color")
+    p.add_argument("--layer-names", metavar="JSON",
+                   help="layer_names.json: raw layer name -> display name "
+                        "in the viewer; key order sets the layer control "
+                        "order")
     p.add_argument("--overlay", action="store_true",
                    help="with --zones/--colors: paint groups as "
                         "semi-transparent overlays on top of the original "
@@ -498,10 +538,13 @@ def main(argv=None):
         else:
             color_fn = paint_fn
         legend_entries = [(k if k != "_default" else "other", v)
-                          for k, v in schema.items()]
+                          for k, v in schema.items()
+                          if k != "global_hatch"]
 
     zone_definition = (load_zone_definition(args.zone_definition)
                        if args.zone_definition else None)
+    layer_names = (load_layer_names(args.layer_names)
+                   if args.layer_names else None)
     streets = load_streets(args.streets) if args.streets else None
     descriptions = None
     if args.descriptions:
@@ -525,6 +568,18 @@ def main(argv=None):
             sys.exit(f"Error: --page-link must be NAME=URL, got: {spec}")
         name, url = spec.split("=", 1)
         links.append({"name": name, "url": url})
+    default_alpha = {}
+    for spec in args.default_alpha:
+        if "=" not in spec:
+            sys.exit(f"Error: --default-alpha must be NAME=ALPHA, got: {spec}")
+        name, val = spec.split("=", 1)
+        try:
+            a = float(val)
+        except ValueError:
+            sys.exit(f"Error: --default-alpha value must be a number: {spec}")
+        if not 0 <= a <= 1:
+            sys.exit(f"Error: --default-alpha value must be in [0, 1]: {spec}")
+        default_alpha[name] = a
     if streets:
         print(f"Streets: {len(streets)} lines "
               f"({len({s['name'] for s in streets if s['name']})} named) "
@@ -544,9 +599,12 @@ def main(argv=None):
             streets=streets, overlay=args.overlay,
             zone_definition=zone_definition,
             descriptions=descriptions,
-            page_title=args.page_title, note=note, links=links,
+            page_title=args.page_title, page_subtitle=args.page_subtitle,
+            note=note, links=links,
             src=Path(args.input).name,
-            default_off=args.default_off or None)
+            default_off=args.default_off or None,
+            default_alpha=default_alpha,
+            layer_names=layer_names)
 
     if args.export_static:
         from gml_map.webapp import export_static
