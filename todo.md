@@ -21,3 +21,8 @@ remove additional street names toggle, all streets properties should be enabled 
 remove footer in sidebar: hover = details, drag = pan, wheel = zoom, click = pin details, Esc = unpin
 streets under GML layers in the panel section order
 layer display names and control order from layer_names.json
+per-zone-type on/off chips under Strefa planistyczna, symbol only, full name in hover tooltip
+zone toggles show full names in a two-column grid
+zone grid collapses to one column in a narrow panel
+tri-state zone layer checkbox: on / off / "-" (mixed zone selection)
+tri-state "all" master toggle for the environmental impact groups

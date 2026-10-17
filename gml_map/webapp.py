@@ -121,7 +121,8 @@ _INTERACTIVE_HTML = r"""<!DOCTYPE html>
   #resizer:hover, #resizer.active { background: #0366d455; }
   #panel { width: 300px; flex: none; background: #f7f7f7;
            border-left: 1px solid #ccc; overflow-y: auto; padding: 10px;
-           font-size: 13px; box-sizing: border-box; }
+           font-size: 13px; box-sizing: border-box;
+           container-type: inline-size; }
   .group { margin-bottom: 10px; padding: 6px 8px; border: 1px solid #ddd;
            border-radius: 6px; background: #fff; }
   .group.off { opacity: 0.45; }
@@ -133,6 +134,20 @@ _INTERACTIVE_HTML = r"""<!DOCTYPE html>
                  white-space: nowrap; }
   .group .cnt { color: #666; font-weight: 400; font-size: 11px; }
   .group input[type=range] { width: 100%; margin: 6px 0 0; }
+  .zgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 8px;
+           margin-top: 6px; }
+  .zrow { display: flex; align-items: flex-start; gap: 4px;
+          font-size: 10.5px; cursor: pointer; user-select: none;
+          color: #444; line-height: 1.3; padding: 1px 2px;
+          border-radius: 3px; }
+  .zrow:hover { background: #eee; }
+  .zrow.off { opacity: 0.35; }
+  .zsw { width: 9px; height: 9px; margin-top: 2px; flex: none;
+         border: 1px solid #0004; border-radius: 2px; display: inline-block; }
+  /* collapse the zone grid to one column in a narrow panel */
+  @container (max-width: 280px) {
+    .zgrid { grid-template-columns: 1fr; }
+  }
   .group .hint { color: #777; font-size: 11px; margin-top: 2px; }
   .group .gtitle { color: #333; font-size: 11.5px; margin: 3px 0 2px;
                    line-height: 1.4; white-space: normal; }
@@ -160,6 +175,7 @@ _INTERACTIVE_HTML = r"""<!DOCTYPE html>
   .sechead { margin: 14px 0 6px; font-size: 11px; text-transform: uppercase;
              letter-spacing: 0.04em; color: #555;
              border-bottom: 1px solid #ddd; padding-bottom: 3px; }
+  .sechead input { margin: 0 5px 0 0; vertical-align: middle; }
   .plinks { margin: 0 0 8px; font-size: 12px; }
   #plinks a { color: #0366d6; display: inline-block; margin: 0 10px 4px 0; }
   .note { margin: 0 0 12px; font-size: 12px; color: #444; }
@@ -284,7 +300,12 @@ function hatchPattern(color, widthPx, spacingPx) {
 function initGroups() {
   for (const g of DATA.groups) {
     groups[g.name] = g;
-    state[g.name] = {on: g.on !== false, alpha: g.alpha || 0.62};
+    const s = {on: g.on !== false, alpha: g.alpha || 0.62};
+    if (g.zones) {  // per-zone-type on/off via the panel zone rows;
+      s.zones = {};  // they start consistent with the layer's state
+      for (const z of g.zones) s.zones[z.sym] = g.on !== false;
+    }
+    state[g.name] = s;
   }
 }
 function makePath(f) {
@@ -336,6 +357,7 @@ function draw() {
   for (const pf of paths) {
     const st = state[pf.bg];
     if (!st || !st.on) continue;
+    if (st.zones && pf.sym && st.zones[pf.sym] === false) continue;
     if (pf.t === 'p') {
       // pf.ba: zone-definition initial fill transparency; the group's
       // opacity slider scales this initial level
@@ -405,6 +427,7 @@ function draw() {
     if (!pf.be || pf.t !== 'p') continue;
     const st = state[pf.bg];
     if (!st || !st.on) continue;
+    if (st.zones && pf.sym && st.zones[pf.sym] === false) continue;
     ctx.globalAlpha = 1;
     ctx.strokeStyle = pf.be;
     ctx.lineWidth = 1.2 / view.s;
@@ -456,6 +479,7 @@ function identify(mx, my) {
     const pf = paths[i];
     const st = state[pf.bg];
     if (!st || !st.on || pf.t !== 'p') continue;
+    if (st.zones && pf.sym && st.zones[pf.sym] === false) continue;
     if (wx < pf.b[0] || wy < pf.b[1] || wx > pf.b[2] || wy > pf.b[3]) continue;
     if (ctx.isPointInPath(pf.p, wx, wy)) {
       const g = pf.g ? groups[pf.g] : null;
@@ -503,6 +527,13 @@ function groupBlock(g, counts) {
     '<label>' + esc(g.label || g.name) +
     ' <span class="cnt">' + (counts[g.name] || 0) + '</span></label></div>' +
     (g.desc_title ? '<div class="gtitle">' + esc(g.desc_title) + '</div>' : '') +
+    // zone-type toggles: full names in a two-column grid, color-coded
+    (g.zones && g.zones.length ? '<div class="zgrid">' +
+      g.zones.map(z => '<span class="zrow' +
+        (st.zones[z.sym] === false ? ' off' : '') +
+        '" data-zone="' + esc(z.sym) + '" data-group="' + esc(g.name) +
+        '"><i class="zsw" style="background:' + z.color + '"></i>' +
+        esc(z.title) + '</span>').join('') + '</div>' : '') +
     // streets are toggle-only; everything else keeps the opacity slider
     (g.kind === 'streets' ? '' :
       range('alpha', L.opacity, '0.05', '1', '0.01', st.alpha)) +
@@ -522,21 +553,75 @@ function buildPanel() {
   for (const g of DATA.groups) secs[g.kind || 'group'].push(g);
   let html = '';
   // sections: environmental impact on top, then GML layers, streets last
-  for (const sec of [[L.secGroups, secs.group],
-                     [L.secLayers, secs.layer],
-                     [L.secStreets, secs.streets]]) {
+  for (const sec of [[L.secGroups, secs.group, 'group'],
+                     [L.secLayers, secs.layer, 'layer'],
+                     [L.secStreets, secs.streets, 'streets']]) {
     if (!sec[1].length) continue;
-    html += '<h4 class="sechead">' + esc(sec[0]) + '</h4>';
+    html += '<h4 class="sechead">';
+    if (sec[2] === 'group') {  // master switch for all impact groups
+      html += '<input type="checkbox" data-secmaster="group">';
+    }
+    html += esc(sec[0]) + '</h4><div class="secbody" data-sec="' + sec[2] + '">';
     for (const g of sec[1]) html += groupBlock(g, counts);
+    html += '</div>';
   }
   document.getElementById('groups').innerHTML = html;
   document.querySelectorAll('[data-toggle]').forEach(el => {
     el.addEventListener('change', () => {
-      state[el.dataset.toggle].on = el.checked;
+      const s = state[el.dataset.toggle];
+      s.on = el.checked;
+      if (s.zones) {  // zone layers: master selects/deselects every zone
+        for (const k in s.zones) s.zones[k] = el.checked;
+        el.closest('.group').querySelectorAll('[data-zone]').forEach(z =>
+          z.classList.toggle('off', !el.checked));
+      }
       document.getElementById('grp-' + el.dataset.toggle).classList.toggle('off', !el.checked);
       draw();
     });
   });
+  document.querySelectorAll('[data-zone]').forEach(el => {
+    el.addEventListener('click', () => {
+      const s = state[el.dataset.group];
+      s.zones[el.dataset.zone] = !s.zones[el.dataset.zone];
+      el.classList.toggle('off', !s.zones[el.dataset.zone]);
+      // tri-state master checkbox: "-" (indeterminate) while the zone
+      // selection is mixed; all-on checks it, all-off unchecks it
+      const vals = Object.values(s.zones);
+      const all = vals.every(Boolean), none = vals.every(v => !v);
+      const card = el.closest('.group');
+      const master = card.querySelector('[data-toggle]');
+      s.on = !none;
+      master.checked = all;
+      master.indeterminate = !all && !none;
+      card.classList.toggle('off', none);
+      draw();
+    });
+  });
+  // section master: tri-state switch for all impact groups, mirroring
+  // the zone master ("-" = mixed selection, click to enable all)
+  const secMaster = document.querySelector('[data-secmaster]');
+  if (secMaster) {
+    const groupToggles = () =>
+      document.querySelectorAll('[data-sec="group"] [data-toggle]');
+    const syncMaster = () => {
+      const states = [...groupToggles()].map(el => state[el.dataset.toggle].on);
+      secMaster.checked = states.every(Boolean);
+      secMaster.indeterminate =
+        !secMaster.checked && !states.every(v => !v);
+    };
+    secMaster.addEventListener('change', () => {
+      groupToggles().forEach(el => {
+        state[el.dataset.toggle].on = secMaster.checked;
+        el.checked = secMaster.checked;
+        document.getElementById('grp-' + el.dataset.toggle)
+          .classList.toggle('off', !secMaster.checked);
+      });
+      draw();
+    });
+    groupToggles().forEach(el =>
+      el.addEventListener('change', syncMaster));
+    syncMaster();
+  }
   document.querySelectorAll('[data-alpha]').forEach(el => {
     el.addEventListener('input', () => {
       state[el.dataset.alpha].alpha = parseFloat(el.value);
@@ -938,6 +1023,7 @@ def build_map_payload(features, schema, prop, zone_mapping,
     kind_rank = {"p": 0, "l": 1, "pt": 2}
 
     entries = []
+    zones_by_layer = {}  # layer -> {sym: {sym, title, color}} for the UI chips
     xmin = ymin = float("inf")
     xmax = ymax = float("-inf")
     for f in features:
@@ -951,8 +1037,8 @@ def build_map_payload(features, schema, prop, zone_mapping,
             bc = color_by_group.get(group, "#dddddd")
             bg = group
         be = None
-        zdef = (zone_definition or {}).get(
-            (f.props.get("symbol") or "").strip())
+        sym = (f.props.get("symbol") or "").strip()
+        zdef = (zone_definition or {}).get(sym)
         if zdef:
             # zone-type feature: definition color + explicit stroke; the
             # optional "alpha" is its initial fill transparency (the UI
@@ -970,6 +1056,10 @@ def build_map_payload(features, schema, prop, zone_mapping,
         }
         if zdef:
             base["ba"] = round(float(zdef.get("alpha", 1.0)), 3)
+            zl = zones_by_layer.setdefault(f.layer, {})
+            if sym not in zl:
+                zl[sym] = {"sym": sym, "title": zdef["title"],
+                           "color": zdef["color"]}
         for g in _flatten_geom(f.geom):
             kind = _kind_of(g)
             if kind == "p":
@@ -991,6 +1081,12 @@ def build_map_payload(features, schema, prop, zone_mapping,
     entries.sort(key=lambda e: (group_rank[e["bg"]],
                                 kind_rank[e["t"]]))
 
+    # per-zone-type on/off chips for layer groups containing zone features
+    for g in groups:
+        zl = zones_by_layer.get(g["name"])
+        if zl and g.get("kind") == "layer":
+            g["zones"] = [zl[k] for k in sorted(zl)]
+
     payload = {
         "title": title,
         "crs": srs or "",
@@ -1001,7 +1097,8 @@ def build_map_payload(features, schema, prop, zone_mapping,
     }
     if streets:
         # streets are not a color group feature; add their group for the UI
-        payload["groups"].append({"name": "streets", "color": "#5a5a5a",
+        payload["groups"].append({"name": "streets", "label": "Streets",
+                                  "color": "#5a5a5a",
                                   "edge": "#3a3a3a", "alpha": 0.85,
                                   "kind": "streets"})
         web_streets = []
