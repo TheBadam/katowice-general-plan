@@ -11,6 +11,7 @@ from matplotlib.colors import to_rgb
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch, PathPatch
 from matplotlib.path import Path
+import matplotlib.patheffects as pe
 from shapely.geometry.base import BaseGeometry
 
 from .parser import Feature
@@ -68,9 +69,41 @@ def _add_scalebar(ax, xmin, ymin, width, height):
             ha="center", fontsize=8, zorder=_POINT_Z + 2)
 
 
+def _draw_streets(ax, streets, map_width):
+    """Draw street lines with rotated, haloed name labels."""
+    if not streets:
+        return
+    segs = [s["coords"] for s in streets if len(s["coords"]) >= 2]
+    if segs:
+        ax.add_collection(LineCollection(segs, colors="#666666",
+                                         linewidths=0.6, zorder=_LINE_Z - 0.5))
+    min_len = max(150.0, map_width * 0.02)
+    halo = [pe.withStroke(linewidth=2.5, foreground="white")]
+    for s in streets:
+        pts = s["coords"]
+        if len(pts) < 2:
+            continue
+        total = sum((pts[i + 1][0] - pts[i][0]) ** 2 +
+                    (pts[i + 1][1] - pts[i][1]) ** 2
+                    for i in range(len(pts) - 1)) ** 0.5
+        if total < min_len:
+            continue
+        (x1, y1), (x2, y2) = max(
+            zip(pts, pts[1:]),
+            key=lambda ab: (ab[0][0] - ab[1][0]) ** 2 +
+                           (ab[0][1] - ab[1][1]) ** 2)
+        deg = math.degrees(math.atan2(y2 - y1, x2 - x1))
+        if 90 < deg <= 270:
+            deg -= 180
+        t = ax.annotate(s["name"], ((x1 + x2) / 2, (y1 + y2) / 2),
+                        rotation=deg, fontsize=6.5, ha="center", va="center",
+                        color="#222222", zorder=_POINT_Z + 1)
+        t.set_path_effects(halo)
+
+
 def render(layers: dict[str, list[Feature]], *, title="", subtitle="",
            label_prop=None, out=None, dpi=200, show=True, keep_open=False,
-           color_fn=None, legend_entries=None):
+           color_fn=None, legend_entries=None, streets=None, overlay_fn=None):
     """Draw all layers; optionally save to `out` and/or show a window.
 
     Returns the path written (or None) and shows the window if requested.
@@ -116,6 +149,32 @@ def render(layers: dict[str, list[Feature]], *, title="", subtitle="",
                         ax.scatter(g.x, g.y, s=22, color=c, edgecolor=ec,
                                    linewidths=0.7, zorder=_POINT_Z)
 
+    # Overlay pass: group colors painted on top of the base rendering.
+    if overlay_fn is not None:
+        for kind in ("polygon", "line", "point"):
+            for name in names:
+                for f in layers[name]:
+                    oc = overlay_fn(f)
+                    if oc is None:
+                        continue
+                    ec = tuple(v * 0.55 for v in to_rgb(oc))
+                    fc = (*to_rgb(oc), 0.62)
+                    for g in _flatten(f.geom):
+                        if _kind(g) != kind:
+                            continue
+                        if kind == "polygon":
+                            p = _poly_patch(g, fc, ec)
+                            if p is not None:
+                                ax.add_patch(p)
+                        elif kind == "line":
+                            ax.add_collection(LineCollection(
+                                [list(g.coords)], colors=[ec],
+                                linewidths=1.4, zorder=_LINE_Z))
+                        else:
+                            ax.scatter(g.x, g.y, s=22, color=oc,
+                                       edgecolor=ec, linewidths=0.7,
+                                       zorder=_POINT_Z)
+
     if not drawn:
         plt.close(fig)
         raise ValueError("No drawable geometry found.")
@@ -128,7 +187,9 @@ def render(layers: dict[str, list[Feature]], *, title="", subtitle="",
     ax.grid(alpha=0.3, linestyle=":")
     ax.ticklabel_format(useOffset=False, style="plain")
 
-    if legend_entries is not None:
+    _draw_streets(ax, streets, dx)
+
+    if legend_entries is not None and overlay_fn is None:
         proxies = [
             Patch(facecolor=c, edgecolor=tuple(v * 0.55 for v in to_rgb(c)),
                   label=label)
@@ -148,6 +209,15 @@ def render(layers: dict[str, list[Feature]], *, title="", subtitle="",
                 proxies.append(Line2D([0], [0], marker="o", color="none",
                                       markerfacecolor=colors[name],
                                       markeredgecolor=edge[name], markersize=7, label=name))
+        if legend_entries is not None:  # overlay mode: layers + groups
+            proxies += [
+                Patch(facecolor=c,
+                      edgecolor=tuple(v * 0.55 for v in to_rgb(c)),
+                      label=label)
+                for label, c in legend_entries
+            ]
+    if streets:
+        proxies.append(Line2D([0], [0], color="#666666", lw=1.5, label="streets"))
     ax.legend(handles=proxies, loc="upper right", fontsize=8,
               framealpha=0.85,
               title=None if legend_entries is not None else "Layers")

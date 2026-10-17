@@ -85,6 +85,94 @@ The URL path does not matter - the server accepts any prefix (e.g.
 through whatever route your proxy exposes for the port. Stop the server with
 Ctrl-C. Add `-o mapa.png` alongside `--web` to also save a static PNG.
 
+### Static export (host anywhere)
+
+`--export-static DIR` writes the same interactive viewer as a fully static
+site: `index.html` (auto language) plus `en/index.html` and `pl/index.html`,
+and `mapdata.json` (~8 MB for the Katowice plan). No Python or server-side
+code is needed at serving time - any static file server works (nginx,
+Apache, GitHub Pages, Netlify, S3, or even a file:// URL). The
+matplotlib-specific link is dropped; everything else (layer toggles,
+opacity, hover details, street names, descriptions, PNG download) works
+identically. The panel is organized into sections ("GML layers",
+"Environmental impact", "Streets") and the UI language follows the URL:
+`/en/` (English), `/pl/` (Polish), or auto-detected from the browser at any
+other path - use the EN/PL switcher in the panel to move between them:
+
+```bash
+.venv/bin/python gml_viewer.py plan.gml --zones zones.json \
+    --colors colors_oznaczenia.json --overlay --streets streets.geojson \
+    --descriptions zones_description.json \
+    --page-title "Environmental impact on Katowice plan" \
+    --page-note page_note.txt \
+    --page-link "Environmental report=https://planogolnydlakatowic.pl/" \
+    --export-static static_site
+
+python3 -m http.server -d static_site 8000
+# or upload the static_site/ folder to any static host
+```
+
+The page fetches `mapdata.json` relative to its own URL (one directory up
+for the language folders), so it works at any path. The same language URLs
+work with the live `--web` server. Pre-generate a preview PNG with
+`-o map.png` in the same command.
+
+For the Katowice plan there is a launcher that exports the static site
+without starting any server:
+
+```bash
+./export_katowice.sh            # -> static_site/ (add -o map.png for a preview)
+```
+
+`run_katowice.sh` is the interactive-server counterpart.
+
+### Interactive group viewer
+
+When `--web` is combined with `--zones`/`--colors`, the browser page is a
+custom canvas viewer with per-group controls:
+
+- checkbox per layer/group to toggle it on/off,
+- opacity slider per layer/group,
+- drag the divider between the map and the panel to resize the panel
+  (width is remembered),
+- hover a shape to see its details (oznaczenie, layer, group, symbol, group
+  description); click to pin the details, click again or Esc to unpin,
+- drag to pan, mouse wheel to zoom,
+- Download PNG button (renders the current view),
+- the classic matplotlib WebAgg view stays available under `.../classic/`.
+
+```bash
+.venv/bin/python gml_viewer.py plan.gml --zones zones.json \
+    --colors colors_oznaczenia.json --web
+```
+
+### Street names overlay
+
+Street names can be overlaid from OpenStreetMap. First download them for the
+plan's area (bounds are taken from the GML, converted to WGS84, results
+transformed back to the plan's CRS):
+
+```bash
+.venv/bin/python fetch_streets.py plan.gml -o streets.geojson
+```
+
+Then add `--streets streets.geojson` to any command. In PNG output the
+streets are drawn as gray lines with rotated, haloed name labels (long
+streets only, to avoid clutter). In the interactive viewer the streets
+appear as their own layer: checkbox to toggle, opacity slider, and a
+"street names" checkbox controlling label display (labels appear when a
+street is long enough at the current zoom).
+
+```bash
+.venv/bin/python gml_viewer.py plan.gml --zones zones.json \
+    --colors colors_oznaczenia.json --streets streets.geojson --web
+```
+
+The streets file is plain GeoJSON (LineString/MultiLineString with a `name`
+property), so any other source works too - it just has to be in the same
+CRS as the plan. Options: `--highways` (regex of OSM highway types),
+`--buffer` (meters around plan bounds), `--overpass` (custom API URL).
+
 For remote machines without such a proxy, forward the port over SSH instead:
 
 ```bash
@@ -111,6 +199,13 @@ Try it on the bundled synthetic example:
 | `--colors JSON` | Color schema file; see below |
 | `--zones JSON` | Group definitions (`zones.json`); see below |
 | `--color-prop PROP` | Property matched against the color schema (default: `oznaczenie`) |
+| `--overlay` | Paint groups as overlays on the original GML rendering |
+| `--default-off GROUP` | Layer/group unchecked by default in the viewer (repeatable) |
+| `--descriptions JSON` | Group descriptions shown in the viewer panel |
+| `--page-title TEXT` | Page title (browser tab and panel header) |
+| `--page-note FILE` | Plain text shown in a collapsible "Explanation" block |
+| `--page-link NAME=URL` | Link shown at the top of the page (repeatable) |
+| `--streets GEOJSON` | Overlay named streets (see fetch_streets.py) |
 | `--geojson PATH` | Export features to GeoJSON |
 | `--swap-xy` | Force swapping coordinate pairs (fix axis order manually) |
 | `--no-swap` | Disable automatic axis-order correction |
@@ -118,6 +213,7 @@ Try it on the bundled synthetic example:
 | `--dpi N` | PNG resolution (default 200) |
 | `--no-show` | Do not open an interactive window |
 | `--web [PORT]` | Serve the map in a browser with pan/zoom (default port 8988) |
+| `--export-static DIR` | Export the interactive viewer as a static site (host anywhere) |
 
 ## Programmatic use
 
@@ -162,6 +258,32 @@ Combine a group definition file with a group color schema:
 
 Oznaczenia not listed in any group (and features without `oznaczenie`, e.g.
 the plan boundary) fall back to `_default`.
+
+**Overlay mode.** By default the group colors *replace* the original
+rendering, and `_default`-colored "other" covers everything not in a group.
+With `--overlay`, the GML is drawn as the bottom layer in its original
+per-layer colors, and the groups become semi-transparent overlays. In the
+interactive viewer every GML layer (e.g. StrefaPlanistyczna,
+ObszarUzupelnieniaZabudowy, ...) is a separate, individually toggleable and
+fadeable base layer, with the A-D group overlays on top:
+
+```bash
+.venv/bin/python gml_viewer.py plan.gml --zones zones.json \
+    --colors colors_oznaczenia.json --overlay --web
+```
+
+**Group descriptions.** `--descriptions zones_description.json` adds a
+title and collapsible details to each group in the interactive panel:
+
+```json
+{
+  "A": {"title": "Tereny, ktore beda wplywaly korzystnie na jakosc srodowiska.",
+         "details": "Tereny te podnosza atrakcyjnosc krajobrazowa..."}
+}
+```
+
+Plain string values are also accepted (shown as details only). The group
+title also appears in the hover tooltip.
 
 The `zones` strings are repaired automatically where possible; every token
 is validated against the oznaczenia actually present in the GML:

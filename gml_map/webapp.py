@@ -31,6 +31,8 @@ import tornado.web
 import tornado.websocket
 from matplotlib._pylab_helpers import Gcf
 from matplotlib.backends import backend_webagg_core as core
+from matplotlib.colors import to_rgb
+from shapely.geometry.base import BaseGeometry
 
 _INDEX_HTML = """<!DOCTYPE html>
 <html lang="en">
@@ -80,6 +82,523 @@ _INDEX_HTML = """<!DOCTYPE html>
     <div id="mpl-warnings" class="mpl-warnings"></div>
     <div id="figures" style="margin: 10px 10px;"></div>
   </body>
+</html>
+"""
+
+
+_INTERACTIVE_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GML map</title>
+<style>
+  html, body { margin: 0; height: 100%; font-family: system-ui, sans-serif;
+               overflow: hidden; }
+  #wrap { display: flex; height: 100%; }
+  #canvas { flex: 1; display: block; cursor: grab; min-width: 0; }
+  #canvas.dragging { cursor: grabbing; }
+  #resizer { width: 6px; flex: none; cursor: col-resize;
+             background: transparent; }
+  #resizer:hover, #resizer.active { background: #0366d455; }
+  #panel { width: 300px; flex: none; background: #f7f7f7;
+           border-left: 1px solid #ccc; overflow-y: auto; padding: 10px;
+           font-size: 13px; box-sizing: border-box; }
+  #panel h3 { margin: 2px 0 10px; font-size: 14px; word-break: break-word; }
+  .group { margin-bottom: 10px; padding: 6px 8px; border: 1px solid #ddd;
+           border-radius: 6px; background: #fff; }
+  .group.off { opacity: 0.45; }
+  .group .head { display: flex; align-items: center; gap: 6px; }
+  .group .swatch { width: 12px; height: 12px; border: 1px solid #0006;
+                   border-radius: 2px; flex: none; }
+  .group label { flex: 1; cursor: pointer; font-weight: 600;
+                 overflow: hidden; text-overflow: ellipsis;
+                 white-space: nowrap; }
+  .group .cnt { color: #666; font-weight: 400; font-size: 11px; }
+  .group input[type=range] { width: 100%; margin: 6px 0 0; }
+  .group .hint { color: #777; font-size: 11px; margin-top: 2px; }
+  .group .gtitle { color: #333; font-size: 11.5px; margin: 3px 0 2px;
+                   line-height: 1.4; white-space: normal; }
+  .group details.gdetails { margin-top: 4px; font-size: 11px; }
+  .group details.gdetails summary { cursor: pointer; color: #0366d6;
+                                    user-select: none; }
+  .group details.gdetails div { color: #555; margin-top: 4px;
+                                line-height: 1.5; white-space: normal; }
+  .group .desc { color: #555; font-size: 11px; margin-top: 4px;
+                 white-space: normal; line-height: 1.4; }
+  .btns button { margin: 3px 0; padding: 5px 8px; font-size: 12px;
+                 width: 100%; cursor: pointer; }
+  #panel a { color: #0366d6; font-size: 12px; display: block; margin: 10px 0; }
+  .src { color: #777; font-size: 11px; margin: -6px 0 8px;
+         word-break: break-word; }
+  .lang { margin: -4px 0 8px; font-size: 12px; }
+  .lang a { color: #0366d6; margin-right: 10px; font-weight: 600; }
+  .lang a.cur { color: #000; pointer-events: none; }
+  .sechead { margin: 14px 0 6px; font-size: 11px; text-transform: uppercase;
+             letter-spacing: 0.04em; color: #555;
+             border-bottom: 1px solid #ddd; padding-bottom: 3px; }
+  .plinks { margin: 0 0 8px; font-size: 12px; }
+  .plinks a { color: #0366d6; display: inline-block; margin: 0 10px 4px 0; }
+  .note { margin: 0 0 12px; font-size: 12px; color: #444; }
+  .note summary { cursor: pointer; color: #0366d6; font-weight: 600; }
+  .note div { margin-top: 6px; line-height: 1.5; white-space: normal; }
+  #info { position: fixed; background: #fff; border: 1px solid #999;
+          border-radius: 4px; padding: 6px 9px; font-size: 12px;
+          pointer-events: none; display: none; z-index: 10;
+          max-width: 280px; white-space: normal;
+          box-shadow: 2px 2px 6px #0003; }
+  #info .desc { color: #555; margin-top: 3px; display: block; }
+  #help { color: #777; font-size: 11px; margin-top: 8px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="canvas"></canvas>
+  <div id="resizer" title="drag to resize panel"></div>
+  <div id="panel">
+    <h3 id="ptitle">Loading...</h3>
+    <div class="lang" id="langsel"></div>
+    <div class="src" id="psrc"></div>
+    <div class="plinks" id="plinks"></div>
+    <details id="pnote" class="note" style="display:none">
+      <summary id="notesum">Explanation</summary>
+      <div id="notetext"></div>
+    </details>
+    <div id="groups"></div>
+    <div class="btns">
+      <button id="zoomin"></button>
+      <button id="zoomout"></button>
+      <button id="fitbtn"></button>
+      <button id="png"></button>
+    </div>
+    __CLASSIC_LINK__
+    <label style="display:block;margin:10px 0 0;font-size:12px;">
+      <input type="checkbox" id="lbls" checked> <span id="lblname"></span></label>
+    <div id="help"></div>
+  </div>
+</div>
+<div id="info"></div>
+<script>
+"use strict";
+// language from the URL path (/en/ or /pl/), else browser language
+const langMatch = location.pathname.match(/\/(en|pl)(\/|$)/);
+const LANG = langMatch ? langMatch[1]
+  : ((navigator.language || 'en').toLowerCase().startsWith('pl') ? 'pl' : 'en');
+const MAPDATA_URL = (langMatch ? '../' : '') + 'mapdata.json';
+const I18N = {
+  en: {
+    secLayers: 'GML layers', secGroups: 'Environmental impact',
+    secStreets: 'Streets', opacity: 'opacity', details: 'details',
+    zoomIn: 'Zoom in', zoomOut: 'Zoom out', reset: 'Reset view',
+    png: 'Download PNG', streetNames: 'street names',
+    explanation: 'Explanation',
+    help: 'hover = details, drag = pan, wheel = zoom,<br>click = pin details, Esc = unpin',
+    layer: 'layer', group: 'group', symbol: 'symbol', data: 'data: '
+  },
+  pl: {
+    secLayers: 'Warstwy GML', secGroups: 'Oddziaływanie na środowisko',
+    secStreets: 'Ulice', opacity: 'przezroczystość', details: 'szczegóły',
+    zoomIn: 'Przybliż', zoomOut: 'Oddal', reset: 'Resetuj widok',
+    png: 'Pobierz PNG', streetNames: 'nazwy ulic',
+    explanation: 'Wyjaśnienie',
+    help: 'najedź = szczegóły, przeciągnij = przesuwanie, kółko myszy = zoom,<br>klik = przypnij szczegóły, Esc = odpij',
+    layer: 'warstwa', group: 'grupa', symbol: 'symbol', data: 'dane: '
+  }
+};
+const L = I18N[LANG] || I18N.en;
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const info = document.getElementById('info');
+let DATA = null, paths = [], streets = [], groups = {};
+const state = {};   // group name -> {on, alpha}
+const view = {s: 1, tx: 0, ty: 0};
+let dpr = 1, labelsOn = true;
+
+function esc(s) {
+  return String(s).replace(/[&<>"]/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+}
+function darkenHex(h) {
+  h = h.replace('#', '');
+  if (h.length === 3) h = h.split('').map(c => c + c).join('');
+  const f = c => Math.round(parseInt(c, 16) * 0.6);
+  return 'rgb(' + f(h.slice(0, 2)) + ',' + f(h.slice(2, 4)) + ',' + f(h.slice(4, 6)) + ')';
+}
+function initGroups() {
+  for (const g of DATA.groups) {
+    groups[g.name] = g;
+    state[g.name] = {on: g.on !== false, alpha: g.alpha || 0.62};
+  }
+}
+function makePath(f) {
+  const entry = {g: f.g, bc: f.bc, bg: f.bg, layer: f.layer, ozn: f.ozn,
+                 sym: f.sym, t: f.t, b: null};
+  if (f.t === 'pt') { entry.x = f.x; entry.y = f.y; entry.b = [f.x, f.y, f.x, f.y]; return entry; }
+  const p = new Path2D();
+  let minx = 1e18, miny = 1e18, maxx = -1e18, maxy = -1e18;
+  const upd = (x, y) => { if (x < minx) minx = x; if (y < miny) miny = y;
+                           if (x > maxx) maxx = x; if (y > maxy) maxy = y; };
+  if (f.t === 'p') {
+    for (const part of f.parts) {
+      for (let ri = 0; ri < part.length; ri++) {
+        const r = part[ri];
+        p.moveTo(r[0], r[1]); upd(r[0], r[1]);
+        for (let i = 2; i < r.length; i += 2) { p.lineTo(r[i], r[i+1]); upd(r[i], r[i+1]); }
+        p.closePath();
+      }
+    }
+  } else {
+    const r = f.parts[0][0];
+    p.moveTo(r[0], r[1]); upd(r[0], r[1]);
+    for (let i = 2; i < r.length; i += 2) { p.lineTo(r[i], r[i+1]); upd(r[i], r[i+1]); }
+  }
+  entry.p = p; entry.b = [minx, miny, maxx, maxy];
+  return entry;
+}
+function resize() {
+  dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(canvas.clientWidth * dpr);
+  canvas.height = Math.round(canvas.clientHeight * dpr);
+  if (DATA) draw();
+}
+function fit() {
+  const [minx, miny, maxx, maxy] = DATA.bounds;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  const s = Math.min(w / (maxx - minx), h / (maxy - miny)) * 0.95;
+  view.s = s;
+  view.tx = (w - s * (minx + maxx)) / 2;
+  view.ty = (h + s * (miny + maxy)) / 2;
+}
+function draw() {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.setTransform(view.s * dpr, 0, 0, -view.s * dpr, view.tx * dpr, view.ty * dpr);
+  ctx.lineJoin = 'round';
+  // base pass: every feature in its base color, controlled by its base group
+  for (const pf of paths) {
+    const st = state[pf.bg];
+    if (!st || !st.on) continue;
+    if (pf.t === 'p') {
+      ctx.globalAlpha = st.alpha;
+      ctx.fillStyle = pf.bc;
+      ctx.fill(pf.p, 'evenodd');
+      ctx.globalAlpha = Math.min(1, st.alpha + 0.2);
+      ctx.strokeStyle = darkenHex(pf.bc);
+      ctx.lineWidth = 1 / view.s;
+      ctx.stroke(pf.p);
+    } else if (pf.t === 'l') {
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = darkenHex(pf.bc);
+      ctx.lineWidth = 1.4 / view.s;
+      ctx.stroke(pf.p);
+    } else {
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = pf.bc;
+      ctx.strokeStyle = darkenHex(pf.bc);
+      ctx.lineWidth = 1 / view.s;
+      ctx.beginPath();
+      ctx.arc(pf.x, pf.y, 6 / view.s, 0, 2 * Math.PI);
+      ctx.fill(); ctx.stroke();
+    }
+  }
+  // overlay pass: group overlays painted on top of the base rendering
+  for (const pf of paths) {
+    if (!pf.g) continue;
+    const st = state[pf.g];
+    if (!st || !st.on) continue;
+    const gr = groups[pf.g];
+    if (pf.t === 'p') {
+      ctx.globalAlpha = st.alpha;
+      ctx.fillStyle = gr.color;
+      ctx.fill(pf.p, 'evenodd');
+      ctx.globalAlpha = Math.min(1, st.alpha + 0.2);
+      ctx.strokeStyle = gr.edge;
+      ctx.lineWidth = 1 / view.s;
+      ctx.stroke(pf.p);
+    } else if (pf.t === 'l') {
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = gr.edge;
+      ctx.lineWidth = 1.4 / view.s;
+      ctx.stroke(pf.p);
+    } else {
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = gr.color;
+      ctx.strokeStyle = gr.edge;
+      ctx.lineWidth = 1 / view.s;
+      ctx.beginPath();
+      ctx.arc(pf.x, pf.y, 6 / view.s, 0, 2 * Math.PI);
+      ctx.fill(); ctx.stroke();
+    }
+  }
+  const stS = state['streets'];
+  if (stS && stS.on && streets.length) {
+    ctx.globalAlpha = stS.alpha;
+    ctx.strokeStyle = groups['streets'].edge;
+    ctx.lineWidth = 1.1 / view.s;
+    for (const s of streets) ctx.stroke(s.p);
+  }
+  ctx.globalAlpha = 1;
+  if (stS && stS.on && labelsOn) drawStreetLabels();
+}
+function drawStreetLabels() {
+  // draw in CSS pixels: scale the backing store by dpr (devicePixelRatio)
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.font = '10px system-ui, sans-serif';
+  for (const s of streets) {
+    if (s.len * view.s < 90) continue;  // too short at this zoom
+    const ax = view.tx + view.s * s.lab[0], ay = view.ty - view.s * s.lab[1];
+    const bx = view.tx + view.s * s.lab[2], by = view.ty - view.s * s.lab[3];
+    let ang = Math.atan2(by - ay, bx - ax);
+    if (ang > Math.PI / 2) ang -= Math.PI;
+    else if (ang < -Math.PI / 2) ang += Math.PI;
+    ctx.save();
+    ctx.translate((ax + bx) / 2, (ay + by) / 2);
+    ctx.rotate(ang);
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+    ctx.strokeText(s.name, 0, -3);
+    ctx.fillStyle = '#222';
+    ctx.fillText(s.name, 0, -3);
+    ctx.restore();
+  }
+}
+function zoomAt(mx, my, factor) {
+  view.tx = mx - (mx - view.tx) * factor;
+  view.ty = my - (my - view.ty) * factor;
+  view.s *= factor;
+  draw();
+}
+function identify(mx, my) {
+  const wx = (mx - view.tx) / view.s;
+  const wy = (view.ty - my) / view.s;
+  ctx.setTransform(view.s * dpr, 0, 0, -view.s * dpr, view.tx * dpr, view.ty * dpr);
+  for (let i = paths.length - 1; i >= 0; i--) {
+    const pf = paths[i];
+    const st = state[pf.bg];
+    if (!st || !st.on || pf.t !== 'p') continue;
+    if (wx < pf.b[0] || wy < pf.b[1] || wx > pf.b[2] || wy > pf.b[3]) continue;
+    if (ctx.isPointInPath(pf.p, wx, wy)) {
+      const g = pf.g ? groups[pf.g] : null;
+      let html = '<b>' + esc(pf.ozn || pf.layer) + '</b>' +
+        '<br>' + L.layer + ': ' + esc(pf.layer);
+      if (pf.g) html += '<br>' + L.group + ': ' + esc(pf.g);
+      if (pf.sym) html += '<br>' + L.symbol + ': ' + esc(pf.sym);
+      if (g) {
+        const t = g.desc_title || g.desc;
+        if (t) {
+          const short = t.length > 140 ? t.slice(0, 140) + '...' : t;
+          html += '<span class="desc">' + esc(short) + '</span>';
+        }
+      }
+      info.innerHTML = html;
+      info.style.display = 'block';
+      info.style.left = Math.min(mx + 14, window.innerWidth - 300) + 'px';
+      info.style.top = (my + 14) + 'px';
+      return true;
+    }
+  }
+  info.style.display = 'none';
+  return false;
+}
+function groupBlock(g, counts) {
+  const a = g.alpha || 0.62;
+  const on = g.on !== false;
+  if (g.name === 'streets') counts[g.name] = streets.length;
+  return '<div class="group' + (on ? '' : ' off') + '" id="grp-' + esc(g.name) + '" title="' + esc(g.name) + '">' +
+    '<div class="head">' +
+    '<input type="checkbox"' + (on ? ' checked' : '') + ' data-toggle="' + esc(g.name) + '">' +
+    '<span class="swatch" style="background:' + g.color + '"></span>' +
+    '<label>' + esc(g.name) +
+    ' <span class="cnt">' + (counts[g.name] || 0) + '</span></label></div>' +
+    (g.desc_title ? '<div class="gtitle">' + esc(g.desc_title) + '</div>' : '') +
+    '<input type="range" min="0.05" max="1" step="0.01" value="' + a + '" data-alpha="' + esc(g.name) + '">' +
+    '<div class="hint">' + L.opacity + ' ' + a + '</div>' +
+    (g.desc ? '<details class="gdetails"><summary>' + L.details + '</summary><div>' +
+      esc(g.desc) + '</div></details>' : '') +
+    '</div>';
+}
+
+function buildPanel() {
+  const counts = {};
+  for (const pf of paths) {
+    if (pf.g) counts[pf.g] = (counts[pf.g] || 0) + 1;
+    if (pf.bg && pf.bg !== pf.g) counts[pf.bg] = (counts[pf.bg] || 0) + 1;
+  }
+  const secs = { layer: [], group: [], streets: [] };
+  for (const g of DATA.groups) secs[g.kind || 'group'].push(g);
+  let html = '';
+  for (const sec of [[L.secLayers, secs.layer],
+                     [L.secGroups, secs.group],
+                     [L.secStreets, secs.streets]]) {
+    if (!sec[1].length) continue;
+    html += '<h4 class="sechead">' + esc(sec[0]) + '</h4>';
+    for (const g of sec[1]) html += groupBlock(g, counts);
+  }
+  document.getElementById('groups').innerHTML = html;
+  document.querySelectorAll('[data-toggle]').forEach(el => {
+    el.addEventListener('change', () => {
+      state[el.dataset.toggle].on = el.checked;
+      document.getElementById('grp-' + el.dataset.toggle).classList.toggle('off', !el.checked);
+      draw();
+    });
+  });
+  document.querySelectorAll('[data-alpha]').forEach(el => {
+    el.addEventListener('input', () => {
+      state[el.dataset.alpha].alpha = parseFloat(el.value);
+      el.parentElement.querySelector('.hint').textContent = L.opacity + ' ' + el.value;
+      draw();
+    });
+  });
+  const lbls = document.getElementById('lbls');
+  if (lbls) {
+    lbls.checked = labelsOn;
+    lbls.addEventListener('change', () => { labelsOn = lbls.checked; draw(); });
+  }
+}
+async function load() {
+  const res = await fetch(MAPDATA_URL);
+  DATA = await res.json();
+  document.title = DATA.page_title || DATA.title;
+  document.getElementById('ptitle').textContent = DATA.page_title || DATA.title;
+  document.getElementById('zoomin').textContent = L.zoomIn;
+  document.getElementById('zoomout').textContent = L.zoomOut;
+  document.getElementById('fitbtn').textContent = L.reset;
+  document.getElementById('png').textContent = L.png;
+  document.getElementById('lblname').textContent = L.streetNames;
+  document.getElementById('help').innerHTML = L.help;
+  document.getElementById('notesum').textContent = L.explanation;
+  const ls = document.getElementById('langsel');
+  const lb = langMatch ? '../' : '';
+  ls.innerHTML = '<a href="' + lb + 'en/"' +
+    (LANG === 'en' ? ' class="cur"' : '') + '>EN</a>' +
+    '<a href="' + lb + 'pl/"' + (LANG === 'pl' ? ' class="cur"' : '') + '>PL</a>';
+  if (DATA.src) {
+    document.getElementById('psrc').textContent = L.data + DATA.src;
+  }
+  if (DATA.links && DATA.links.length) {
+    document.getElementById('plinks').innerHTML =
+      DATA.links.map(l => '<a href="' + esc(l.url) +
+        '" target="_blank" rel="noopener">' + esc(l.name) + '</a>').join('');
+  }
+  if (DATA.note) {
+    document.getElementById('pnote').style.display = 'block';
+    document.getElementById('notetext').textContent = DATA.note;
+  }
+  initGroups();
+  for (const f of DATA.features) paths.push(makePath(f));
+  if (DATA.streets) {
+    for (const s of DATA.streets) {
+      const p = new Path2D();
+      const r = s.parts[0];
+      p.moveTo(r[0], r[1]);
+      for (let i = 2; i < r.length; i += 2) p.lineTo(r[i], r[i + 1]);
+      streets.push({p: p, name: s.name, len: s.len, lab: s.lab});
+    }
+  }
+  buildPanel();
+  resize(); fit(); draw();
+}
+
+let drag = null, pinned = false, hoverRaf = null;
+canvas.addEventListener('mousedown', e => {
+  drag = {x: e.offsetX, y: e.offsetY, moved: false};
+  canvas.classList.add('dragging');
+});
+canvas.addEventListener('mousemove', e => {
+  if (drag || pinned || !DATA) return;
+  lastHover = {x: e.offsetX, y: e.offsetY};
+  if (!hoverRaf) {
+    hoverRaf = requestAnimationFrame(() => {
+      hoverRaf = null;
+      identify(lastHover.x, lastHover.y);
+    });
+  }
+});
+canvas.addEventListener('mouseleave', () => {
+  if (!pinned) info.style.display = 'none';
+});
+let lastHover = {x: 0, y: 0};
+window.addEventListener('mousemove', e => {
+  if (drag) {
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
+    if (drag.moved) {
+      view.tx += e.clientX - drag.x;
+      view.ty += e.clientY - drag.y;
+      drag.x = e.clientX; drag.y = e.clientY;
+      draw();
+    }
+  } else if (resizing) {
+    const w = Math.min(600, Math.max(200,
+      resizing.w - (e.clientX - resizing.x)));  // panel is right-anchored
+    panel.style.width = w + 'px';
+    if (!sizeRaf) {
+      sizeRaf = requestAnimationFrame(() => { sizeRaf = null; resize(); });
+    }
+  }
+});
+window.addEventListener('mouseup', e => {
+  if (drag) {
+    const moved = drag.moved;
+    drag = null;
+    canvas.classList.remove('dragging');
+    if (!moved) {
+      const r = canvas.getBoundingClientRect();
+      // click pins/unpins the details shown on hover
+      if (pinned) {
+        pinned = false;
+        info.style.display = 'none';
+      } else {
+        pinned = identify(e.clientX - r.left, e.clientY - r.top);
+      }
+    }
+  }
+  if (resizing) {
+    resizing = null;
+    resizer.classList.remove('active');
+    document.body.style.cursor = '';
+    try { localStorage.setItem('panelWidth', panel.offsetWidth); } catch (err) {}
+  }
+});
+
+// panel resizing
+const panel = document.getElementById('panel');
+const resizer = document.getElementById('resizer');
+let resizing = null, sizeRaf = null;
+try {
+  const saved = localStorage.getItem('panelWidth');
+  if (saved) panel.style.width = Math.min(600, Math.max(200, +saved)) + 'px';
+} catch (err) {}
+resizer.addEventListener('mousedown', e => {
+  resizing = {x: e.clientX, w: panel.offsetWidth};
+  resizer.classList.add('active');
+  document.body.style.cursor = 'col-resize';
+  e.preventDefault();
+});
+window.addEventListener('keydown', e => { if (e.key === 'Escape') { pinned = false; info.style.display = 'none'; } });
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  const f = e.deltaY < 0 ? 1.2 : 1 / 1.2;
+  zoomAt(e.offsetX, e.offsetY, f);
+}, {passive: false});
+document.getElementById('fitbtn').onclick = () => { fit(); draw(); };
+document.getElementById('zoomin').onclick = () => zoomAt(canvas.clientWidth / 2, canvas.clientHeight / 2, 1.3);
+document.getElementById('zoomout').onclick = () => zoomAt(canvas.clientWidth / 2, canvas.clientHeight / 2, 1 / 1.3);
+document.getElementById('png').onclick = () => {
+  const off = document.createElement('canvas');
+  off.width = canvas.width; off.height = canvas.height;
+  const octx = off.getContext('2d');
+  octx.fillStyle = '#fff'; octx.fillRect(0, 0, off.width, off.height);
+  octx.drawImage(canvas, 0, 0);
+  const a = document.createElement('a');
+  a.download = 'map.png';
+  a.href = off.toDataURL('image/png');
+  a.click();
+};
+window.addEventListener('resize', resize);
+load();
+</script>
+</body>
 </html>
 """
 
@@ -150,13 +669,17 @@ class _WebSocket(tornado.websocket.WebSocketHandler):
 
 
 class _Index(tornado.web.RequestHandler):
-    def initialize(self, title):
+    def initialize(self, title, interactive=False):
         self.title = title
+        self.interactive = interactive
 
     def get(self, _prefix=""):
         if not self.request.path.endswith("/"):
             # Ensure relative asset URLs resolve under the proxy prefix.
             self.redirect(self.request.path + "/", permanent=False)
+            return
+        if self.interactive:
+            self.write(interactive_page_html(classic=True))
             return
         figures = sorted(Gcf.figs.items())
         html = tornado.template.Template(_INDEX_HTML).generate(
@@ -164,13 +687,288 @@ class _Index(tornado.web.RequestHandler):
         self.write(html)
 
 
-def serve(fig, *, port=8988, address="0.0.0.0", title="GML Map Viewer"):
+class _Classic(tornado.web.RequestHandler):
+    """The matplotlib WebAgg figure page (available at .../classic/)."""
+
+    def get(self, _prefix=""):
+        if not self.request.path.endswith("/"):
+            self.redirect(self.request.path + "/", permanent=False)
+            return
+        figures = sorted(Gcf.figs.items())
+        html = tornado.template.Template(_INDEX_HTML).generate(
+            figures=figures, title="matplotlib")
+        self.write(html)
+
+
+class _MapData(tornado.web.RequestHandler):
+    def initialize(self, payload):
+        self.payload = payload
+
+    def get(self, _prefix, _ext=None):
+        self.set_header("Content-Type", "application/json")
+        self.write(self.payload)
+
+
+# ---------------------------------------------------------------------------
+# interactive canvas viewer payload
+# ---------------------------------------------------------------------------
+
+def _darken(color):
+    r, g, b = to_rgb(color)
+    return "#{:02x}{:02x}{:02x}".format(int(r * 153), int(g * 153), int(b * 153))
+
+
+def _flat_ring(ring):
+    out = []
+    for x, y in ring.coords:
+        out.append(round(x, 2))
+        out.append(round(y, 2))
+    return out
+
+
+def _kind_of(geom: BaseGeometry) -> str:
+    t = geom.geom_type
+    if "Point" in t:
+        return "pt"
+    if "Line" in t or "Curve" in t:
+        return "l"
+    return "p"
+
+
+def _flatten_geom(geom: BaseGeometry):
+    if hasattr(geom, "geoms"):
+        for p in geom.geoms:
+            yield from _flatten_geom(p)
+    else:
+        yield geom
+
+
+def build_map_payload(features, schema, prop, zone_mapping,
+                      title, srs=None, resolve_key=None, streets=None,
+                      overlay=False, descriptions=None,
+                      page_title=None, note=None, links=None, src=None,
+                      default_off=None):
+    """Build the JSON payload for the interactive canvas viewer.
+
+    `resolve_key(value) -> schema key or None` decides the group of a feature
+    (same logic as the CLI color matching); required.
+    `streets`: list of {"coords": [(x, y), ...], "name", "highway"} overlays.
+    `overlay`: if True, features keep their original per-layer colors as
+    individually controllable base layers and groups are painted on top;
+    if False, groups replace the colors.
+    `descriptions`: optional {group name: description text} shown in the UI.
+    """
+    if resolve_key is None:
+        raise ValueError("resolve_key callback is required")
+
+    if overlay:
+        # the original per-layer colors form individually controllable
+        # base layers; groups are painted on top as overlays
+        cmap = mpl.colormaps["tab20"]
+        layer_names = sorted({f.layer for f in features}, key=str.lower)
+        base_color = {n: mpl.colors.to_hex(cmap(i % 20))
+                      for i, n in enumerate(layer_names)}
+        groups = [{"name": n, "color": base_color[n],
+                   "edge": _darken(base_color[n]), "alpha": 0.62,
+                   "kind": "layer"}
+                  for n in layer_names]
+        groups += [{"name": k, "color": v, "edge": _darken(v), "alpha": 0.62,
+                    "kind": "group"}
+                   for k, v in schema.items() if k != "_default"]
+        color_by_group = {g["name"]: g["color"] for g in groups}
+    else:
+        groups = [{"name": k, "color": v, "edge": _darken(v), "alpha": 0.62,
+                    "kind": "group"}
+                   for k, v in schema.items() if k != "_default"]
+        default_color = schema.get("_default", "#dddddd")
+        groups.append({"name": "other", "color": default_color,
+                       "edge": _darken(default_color), "alpha": 0.62,
+                       "kind": "group"})
+        color_by_group = {g["name"]: g["color"] for g in groups}
+    if descriptions:
+        for g in groups:
+            d = descriptions.get(g["name"])
+            if not d:
+                continue
+            if isinstance(d, dict):  # {"title": ..., "details": ...}
+                if d.get("title"):
+                    g["desc_title"] = str(d["title"]).strip()
+                if d.get("details"):
+                    g["desc"] = str(d["details"]).strip()
+            elif str(d).strip():     # legacy: plain description string
+                g["desc"] = str(d).strip()
+    group_rank = {g["name"]: i for i, g in enumerate(groups)}
+    kind_rank = {"p": 0, "l": 1, "pt": 2}
+
+    entries = []
+    xmin = ymin = float("inf")
+    xmax = ymax = float("-inf")
+    for f in features:
+        key = resolve_key(f.props.get(prop))
+        if overlay:
+            group = key if key in group_rank else None
+            bc = base_color.get(f.layer, "#cccccc")
+            bg = f.layer
+        else:
+            group = key if key in group_rank else "other"
+            bc = color_by_group.get(group, "#dddddd")
+            bg = group
+        base = {
+            "g": group,
+            "bc": bc,
+            "bg": bg,
+            "layer": f.layer,
+            "ozn": (f.props.get(prop) or "").strip(),
+            "sym": f.props.get("symbol", ""),
+        }
+        for g in _flatten_geom(f.geom):
+            kind = _kind_of(g)
+            if kind == "p":
+                if g.exterior is None:
+                    continue
+                part = [_flat_ring(g.exterior)]
+                part.extend(_flat_ring(r) for r in g.interiors)
+                entry = dict(base, t="p", parts=[part])
+            elif kind == "l":
+                entry = dict(base, t="l", parts=[[_flat_ring(g)]])
+            else:
+                entry = dict(base, t="pt", x=round(g.x, 2), y=round(g.y, 2))
+            b = g.bounds
+            if b and all(v == v for v in b):  # non-empty
+                xmin, ymin = min(xmin, b[0]), min(ymin, b[1])
+                xmax, ymax = max(xmax, b[2]), max(ymax, b[3])
+            entries.append(entry)
+
+    entries.sort(key=lambda e: (group_rank[e["bg"]],
+                                kind_rank[e["t"]]))
+
+    payload = {
+        "title": title,
+        "crs": srs or "",
+        "bounds": [xmin, ymin, xmax, ymax],
+        "groups": groups,
+        "features": entries,
+    }
+    if streets:
+        # streets are not a color group feature; add their group for the UI
+        payload["groups"].append({"name": "streets", "color": "#5a5a5a",
+                                  "edge": "#3a3a3a", "alpha": 0.85,
+                                  "kind": "streets"})
+        web_streets = []
+        for s in streets:
+            pts = s["coords"]
+            if len(pts) < 2:
+                continue
+            flat = []
+            length = 0.0
+            best = None  # longest segment for the label
+            for i, (x, y) in enumerate(pts):
+                flat.append(round(x, 2))
+                flat.append(round(y, 2))
+                if i:
+                    dx, dy = x - pts[i - 1][0], y - pts[i - 1][1]
+                    d = (dx * dx + dy * dy) ** 0.5
+                    length += d
+                    if best is None or d > best[0]:
+                        best = (d, pts[i - 1][0], pts[i - 1][1], x, y)
+            web_streets.append({
+                "parts": [flat],
+                "name": s.get("name", ""),
+                "hw": s.get("highway", ""),
+                "len": round(length, 1),
+                "lab": [best[1], best[2], best[3], best[4]],
+            })
+        payload["streets"] = web_streets
+        for s in web_streets:  # include streets in the rebase extent
+            r = s["parts"][0]
+            for i in range(0, len(r), 2):
+                xmin, ymin = min(xmin, r[i]), min(ymin, r[i + 1])
+                xmax, ymax = max(xmax, r[i]), max(ymax, r[i + 1])
+
+    # Rebase all coordinates to a local origin. Browsers store canvas
+    # path points as 32-bit floats, so absolute coordinates of millions
+    # of meters lose precision and visibly drift at deep zoom-out.
+    ox, oy = xmin, ymin
+
+    def _shift_ring(r):
+        for i in range(0, len(r), 2):
+            r[i] = round(r[i] - ox, 2)
+            r[i + 1] = round(r[i + 1] - oy, 2)
+
+    for e in entries:
+        if e["t"] == "pt":
+            e["x"] = round(e["x"] - ox, 2)
+            e["y"] = round(e["y"] - oy, 2)
+        else:
+            for part in e["parts"]:
+                if e["t"] == "p":
+                    for ring in part:
+                        _shift_ring(ring)
+                else:
+                    _shift_ring(part[0])
+    if payload.get("streets"):
+        for s in payload["streets"]:
+            _shift_ring(s["parts"][0])
+            s["lab"] = [round(v - (ox if i % 2 == 0 else oy), 2)
+                        for i, v in enumerate(s["lab"])]
+
+    payload["bounds"] = [0, 0, round(xmax - ox, 2), round(ymax - oy, 2)]
+    payload["page_title"] = page_title or title
+    payload["src"] = src or title
+    payload["note"] = note or ""
+    payload["links"] = links or []
+    if default_off:
+        for g in payload["groups"]:
+            g["on"] = g["name"] not in default_off
+    return payload
+
+
+def interactive_page_html(classic=True):
+    """The interactive viewer page; works live or as a static export.
+
+    The mapdata URL and the language are computed client-side from the page
+    URL, so the same HTML works at any path (incl. /en/ and /pl/ subpaths).
+    """
+    html = _INTERACTIVE_HTML
+    html = html.replace(
+        "__CLASSIC_LINK__",
+        '<a href="classic/">matplotlib view &rarr;</a>' if classic else "")
+    return html
+
+
+def export_static(payload, out_dir):
+    """Write a fully static copy of the interactive viewer to `out_dir`.
+
+    Produces index.html (auto language) plus en/ and pl/ copies, and
+    mapdata.json; hostable on any static file server (nginx, GitHub Pages,
+    S3, ...). No Python is needed at serving time.
+    Returns the index.html path.
+    """
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    html = interactive_page_html(classic=False)
+    (out / "index.html").write_text(html, encoding="utf-8")
+    for lang in ("en", "pl"):
+        sub = out / lang
+        sub.mkdir(exist_ok=True)
+        (sub / "index.html").write_text(html, encoding="utf-8")
+    (out / "mapdata.json").write_text(
+        json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    return out / "index.html"
+
+
+def serve(fig, *, port=8988, address="0.0.0.0", title="GML Map Viewer",
+          data=None):
     """Serve `fig` interactively; blocks until Ctrl-C.
+
+    With `data` (a build_map_payload dict), the index page becomes a custom
+    canvas viewer with per-group visibility toggles and opacity sliders;
+    the matplotlib WebAgg figure remains at .../classic/.
 
     Works both directly and behind reverse proxies with or without a URL
     prefix - the browser computes all URLs relative to the page.
     """
-    app = tornado.web.Application([
+    handlers = [
         (r"(.*)/_static/(.*)", _Static,
          {"path": core.FigureManagerWebAgg.get_static_file_path()}),
         (r"(.*)/_images/(.*)", _Static,
@@ -179,10 +977,22 @@ def serve(fig, *, port=8988, address="0.0.0.0", title="GML Map Viewer"):
         (r"(.*)/js/mpl\.js", _MplJs),
         (r"(.*)/([0-9]+)/ws", _WebSocket),
         (r"(.*)/([0-9]+)/download\.([a-z0-9.]+)", _Download),
-        (r"(.*)", _Index, {"title": title}),
-    ])
+    ]
+    if data is not None:
+        handlers += [
+            (r"(.*)/mapdata(\.json)?", _MapData,
+             {"payload": json.dumps(data)}),
+            (r"(.*)/classic/?", _Classic),
+            (r"(.*)", _Index, {"title": title, "interactive": True}),
+        ]
+        print(f"Interactive group viewer ready on port {port} "
+              "(per-group on/off + opacity).")
+        print("The matplotlib view is available under .../classic/")
+    else:
+        handlers += [(r"(.*)", _Index, {"title": title})]
+        print(f"Interactive map ready on port {port} (any URL prefix works).")
+    app = tornado.web.Application(handlers)
     app.listen(port, address)
-    print(f"Interactive map ready on port {port} (any URL prefix works).")
     print("If you are behind a reverse proxy, open this port through it,")
     print("e.g. https://proxy.example/proxy/{}/".format(port))
     print("Press Ctrl-C in this terminal to stop.")

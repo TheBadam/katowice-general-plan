@@ -172,40 +172,58 @@ def load_color_schema(path):
     return data
 
 
-def make_color_fn(schema, prop, zone_mapping=None):
+def resolve_schema_key(value, schema, zone_mapping=None):
+    """Map a property value to a schema key (group), or None.
+
+    Group mode (zone_mapping given): value -> group via zones.json.
+    Value mode: exact value, then value with leading digits stripped.
+    """
+    if value is not None:
+        value = value.strip()
+    if zone_mapping is not None:
+        key = zone_mapping.get(value) if value else None
+        if key is not None and key not in schema:
+            key = None
+        return key
+    if value and value in schema:
+        return value
+    code = value.lstrip("0123456789") if value else ""
+    return code if value and code and code in schema else None
+
+
+def make_color_fn(schema, prop, zone_mapping=None, overlay=False):
     """Return (color_fn, report).
 
-    Group mode (zone_mapping given): feature property value -> group via
-    zones.json, then group -> color via the schema.
-    Value mode (no zone_mapping): exact value, then value with leading
-    digits stripped, then '_default'.
+    overlay=False: color_fn returns the final color for each feature
+    (group color or '_default').
+    overlay=True: color_fn returns the overlay color for grouped features
+    and None for ungrouped ones (which keep their original layer color).
     """
     from matplotlib.colors import to_rgb
     fallback = schema.get("_default", "#dddddd")
     stats = {"matched": 0, "unmatched": set(), "per_key": {}, "seen": set()}
 
-    def color_fn(f):
-        value = f.props.get(prop)
-        if value is not None:
-            value = value.strip()
-        if zone_mapping is not None:
-            key = zone_mapping.get(value)
-            if key is not None and key not in schema:
-                key = None
-        elif value and value in schema:
-            key = value
-        else:
-            code = value.lstrip("0123456789") if value else ""
-            key = code if value and code and code in schema else None
-        color = fallback if key is None else to_rgb(schema[key])
+    def record(f, value, key):
         if id(f) not in stats["seen"]:  # count each feature once
             stats["seen"].add(id(f))
             if key is None:
-                stats["unmatched"].add(value or "(no value)")
+                stats["unmatched"].add((value or "").strip() or "(no value)")
             else:
                 stats["matched"] += 1
                 stats["per_key"][key] = stats["per_key"].get(key, 0) + 1
+
+    def color_fn(f):
+        value = f.props.get(prop)
+        key = resolve_schema_key(value, schema, zone_mapping)
+        color = fallback if key is None else to_rgb(schema[key])
+        record(f, value, key)
         return color
+
+    def overlay_fn(f):
+        value = f.props.get(prop)
+        key = resolve_schema_key(value, schema, zone_mapping)
+        record(f, value, key)
+        return to_rgb(schema[key]) if key is not None else None
 
     def report():
         keys = [k for k in schema if k != "_default"]
@@ -222,7 +240,47 @@ def make_color_fn(schema, prop, zone_mapping=None):
             print(f"  unmatched values ({len(shown)}): "
                   + ", ".join(shown[:cap]) + (f" ... +{more}" if more > 0 else ""))
 
-    return color_fn, report
+    return (overlay_fn if overlay else color_fn), report
+
+
+def load_streets(path):
+    """Load street overlays from a GeoJSON file (e.g. fetch_streets.py output).
+
+    Returns a list of {"coords": [(x, y), ...], "name", "highway"} dicts in
+    the same CRS as the plan (no reprojection is applied).
+    """
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        sys.exit(f"Error: {path} is not valid JSON: {e}")
+    if isinstance(data, dict):
+        feats = [data] if data.get("type") == "Feature" \
+            else data.get("features", [])
+    elif isinstance(data, list):
+        feats = data
+    else:
+        sys.exit(f"Error: {path} is not a GeoJSON file")
+
+    out = []
+
+    def add_line(coords, props):
+        if coords and len(coords) >= 2:
+            out.append({"coords": [(float(x), float(y)) for x, y in coords],
+                        "name": props.get("name", ""),
+                        "highway": props.get("highway", "")})
+
+    for f in feats:
+        if not isinstance(f, dict):
+            continue
+        props = f.get("properties") or {}
+        g = f.get("geometry") or {}
+        t = g.get("type")
+        if t == "LineString":
+            add_line(g.get("coordinates"), props)
+        elif t == "MultiLineString":
+            for ln in g.get("coordinates", []):
+                add_line(ln, props)
+    return out
 
 
 def main(argv=None):
@@ -254,6 +312,31 @@ def main(argv=None):
     p.add_argument("--color-prop", default="oznaczenie", metavar="PROP",
                    help="property matched against the color schema "
                         "(default: oznaczenie)")
+    p.add_argument("--descriptions", metavar="JSON",
+                   help="JSON with {group: description} or "
+                        "{group: {\"title\": ..., \"details\": ...}} shown in "
+                        "the viewer panel")
+    p.add_argument("--page-title", metavar="TEXT",
+                   help="page title in the browser tab and the viewer "
+                        "panel header")
+    p.add_argument("--page-note", metavar="FILE",
+                   help="plain text file shown on the page in a collapsible "
+                        "'Explanation' block (methodology, sources...)")
+    p.add_argument("--page-link", action="append", default=[],
+                   metavar="NAME=URL",
+                   help="link shown at the top of the page (repeatable), "
+                        "e.g. --page-link 'Report=https://example.com'")
+    p.add_argument("--default-off", action="append", default=[],
+                   metavar="GROUP",
+                   help="layer/group shown unchecked by default in the "
+                        "interactive viewer (repeatable, exact name)")
+    p.add_argument("--overlay", action="store_true",
+                   help="with --zones/--colors: paint groups as "
+                        "semi-transparent overlays on top of the original "
+                        "GML rendering instead of replacing its colors")
+    p.add_argument("--streets", metavar="GEOJSON",
+                   help="overlay named streets from a GeoJSON file "
+                        "(see fetch_streets.py)")
     p.add_argument("--geojson", metavar="PATH", help="export features to GeoJSON")
     p.add_argument("--swap-xy", dest="swap", action="store_true", default=None,
                    help="force swapping coordinate pairs (axis order fix)")
@@ -266,6 +349,10 @@ def main(argv=None):
     p.add_argument("--web", nargs="?", const=8988, metavar="PORT", type=int,
                    help="serve the map in a web browser (interactive pan/zoom); "
                         "headless-safe. Optional PORT (default 8988).")
+    p.add_argument("--export-static", metavar="DIR",
+                   help="export the interactive viewer as a static web page "
+                        "(index.html + mapdata.json) to DIR; hostable on "
+                        "any static file server, no Python needed")
     args = p.parse_args(argv)
 
     if args.web is not None:
@@ -309,13 +396,15 @@ def main(argv=None):
         stem = Path(args.input).stem or "gml"
         out = f"{stem}_map.png"
 
-    title = args.title or Path(args.input).name
+    title = (args.title or args.page_title
+             or Path(args.input).name)
     srs = next((f.srs for feats in layers.values() for f in feats if f.srs), None)
     subtitle = f"{sum(len(v) for v in layers.values())} features, {len(layers)} layers"
     if srs:
         subtitle += f"  |  {srs}"
 
     color_fn = None
+    overlay_fn = None
     legend_entries = None
     color_report = None
     if args.zones or args.colors:
@@ -343,21 +432,96 @@ def main(argv=None):
                           for i, g in enumerate(groups)}
         else:
             schema = load_color_schema(args.colors)
-        color_fn, color_report = make_color_fn(schema, args.color_prop,
-                                               zone_mapping)
+        paint_fn, color_report = make_color_fn(schema, args.color_prop,
+                                               zone_mapping,
+                                               overlay=args.overlay)
+        if args.overlay:
+            overlay_fn = paint_fn
+        else:
+            color_fn = paint_fn
         legend_entries = [(k if k != "_default" else "other", v)
                           for k, v in schema.items()]
 
+    streets = load_streets(args.streets) if args.streets else None
+    descriptions = None
+    if args.descriptions:
+        try:
+            descriptions = json.JSONDecoder(strict=False).decode(
+                Path(args.descriptions).read_text(encoding="utf-8"))
+        except json.JSONDecodeError as e:
+            sys.exit(f"Error: {args.descriptions} is not valid JSON: {e}")
+        if not isinstance(descriptions, dict):
+            sys.exit(f"Error: {args.descriptions} must be a JSON object "
+                     '{"group": "description", ...}')
+    note = None
+    if args.page_note:
+        try:
+            note = Path(args.page_note).read_text(encoding="utf-8").strip()
+        except OSError as e:
+            sys.exit(f"Error: cannot read {args.page_note}: {e}")
+    links = []
+    for spec in args.page_link:
+        if "=" not in spec:
+            sys.exit(f"Error: --page-link must be NAME=URL, got: {spec}")
+        name, url = spec.split("=", 1)
+        links.append({"name": name, "url": url})
+    if streets:
+        print(f"Streets: {len(streets)} lines "
+              f"({len({s['name'] for s in streets if s['name']})} named) "
+              f"from {args.streets}")
+
+    def make_web_payload():
+        """Build the interactive-viewer payload (None without a color mode)."""
+        if color_fn is None and overlay_fn is None:
+            return None
+        from gml_map.webapp import build_map_payload
+        resolve_key = lambda value: resolve_schema_key(
+            value, schema, zone_mapping)
+        return build_map_payload(
+            [f for feats in layers.values() for f in feats],
+            schema, args.color_prop, zone_mapping,
+            title=title, srs=srs, resolve_key=resolve_key,
+            streets=streets, overlay=args.overlay,
+            descriptions=descriptions,
+            page_title=args.page_title, note=note, links=links,
+            src=Path(args.input).name,
+            default_off=args.default_off or None)
+
+    if args.export_static:
+        from gml_map.webapp import export_static
+        payload = make_web_payload()
+        if payload is None:
+            sys.exit("Error: --export-static requires --zones/--colors")
+        index = export_static(payload, args.export_static)
+        if color_report:
+            color_report()
+        if args.output:
+            render(layers, title=title, subtitle=subtitle,
+                   label_prop=args.label, out=args.output, dpi=args.dpi,
+                   show=False, color_fn=color_fn,
+                   legend_entries=legend_entries, streets=streets,
+                   overlay_fn=overlay_fn)
+            print(f"\nMap saved -> {args.output}")
+        size = sum(f.stat().st_size
+                   for f in Path(args.export_static).iterdir())
+        print(f"\nStatic site exported -> {index} "
+              f"({len(payload['features'])} features, {size / 1e6:.1f} MB)")
+        print("Host it with any static server, e.g.:")
+        print(f"  python3 -m http.server -d {args.export_static} 8000")
+        return 0
+
     if args.web is not None:
         from gml_map.webapp import serve
+        payload = make_web_payload()
         fig = render(layers, title=title, subtitle=subtitle,
                      label_prop=args.label, out=out, dpi=args.dpi,
                      show=False, keep_open=True,
-                     color_fn=color_fn, legend_entries=legend_entries)
+                     color_fn=color_fn, legend_entries=legend_entries,
+                     streets=streets, overlay_fn=overlay_fn)
         if color_report:
             color_report()
         print()
-        serve(fig, port=args.web, title=title)
+        serve(fig, port=args.web, title=title, data=payload)
         plt.close(fig)
         if out:
             print(f"\nMap saved -> {out}")
@@ -365,7 +529,8 @@ def main(argv=None):
 
     render(layers, title=title, subtitle=subtitle,
            label_prop=args.label, out=out, dpi=args.dpi, show=interactive,
-           color_fn=color_fn, legend_entries=legend_entries)
+           color_fn=color_fn, legend_entries=legend_entries, streets=streets,
+           overlay_fn=overlay_fn)
     if color_report:
         color_report()
 
