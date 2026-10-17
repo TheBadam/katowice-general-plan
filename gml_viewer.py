@@ -43,7 +43,14 @@ def build_zone_mapping(path, known):
     - bare numbers take the code from a neighbouring token ('187.190SW').
     """
     try:
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        text = Path(path).read_text(encoding="utf-8")
+    except OSError as e:
+        sys.exit(f"Error: cannot read {path}: {e}")
+    # tolerate full-line // comments (e.g. a file annotation marker)
+    text = "\n".join(l for l in text.splitlines()
+                     if not l.lstrip().startswith("//"))
+    try:
+        data = json.loads(text)
     except json.JSONDecodeError as e:
         sys.exit(f"Error: {path} is not valid JSON: {e}")
     if not isinstance(data, dict) or not data:
@@ -283,6 +290,27 @@ def load_streets(path):
     return out
 
 
+def load_zone_definition(path):
+    """Load zone_definition.json: {symbol: {"title", "color", "stroke"}}."""
+    from matplotlib.colors import to_rgb
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        sys.exit(f"Error: cannot load {path}: {e}")
+    if not isinstance(data, dict):
+        sys.exit(f"Error: {path} must map symbols to "
+                 '{"title": ..., "color": ..., "stroke": ...}')
+    for sym, z in data.items():
+        if not isinstance(z, dict) or "title" not in z or "color" not in z:
+            sys.exit(f"Error: {path}: entry {sym!r} needs title and color")
+        try:
+            to_rgb(z["color"])
+            to_rgb(z.get("stroke", "#191919"))
+        except (ValueError, TypeError):
+            sys.exit(f"Error: {path}: invalid color in entry {sym!r}")
+    return data
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(
         prog="gml_viewer.py",
@@ -330,6 +358,10 @@ def main(argv=None):
                    metavar="GROUP",
                    help="layer/group shown unchecked by default in the "
                         "interactive viewer (repeatable, exact name)")
+    p.add_argument("--zone-definition", metavar="JSON",
+                   help="zone_definition.json: paint zone-type features "
+                        "(matched by the 'symbol' property) with their "
+                        "fill color and stroke (border) color")
     p.add_argument("--overlay", action="store_true",
                    help="with --zones/--colors: paint groups as "
                         "semi-transparent overlays on top of the original "
@@ -442,6 +474,8 @@ def main(argv=None):
         legend_entries = [(k if k != "_default" else "other", v)
                           for k, v in schema.items()]
 
+    zone_definition = (load_zone_definition(args.zone_definition)
+                       if args.zone_definition else None)
     streets = load_streets(args.streets) if args.streets else None
     descriptions = None
     if args.descriptions:
@@ -482,6 +516,7 @@ def main(argv=None):
             schema, args.color_prop, zone_mapping,
             title=title, srs=srs, resolve_key=resolve_key,
             streets=streets, overlay=args.overlay,
+            zone_definition=zone_definition,
             descriptions=descriptions,
             page_title=args.page_title, note=note, links=links,
             src=Path(args.input).name,
@@ -500,6 +535,7 @@ def main(argv=None):
                    label_prop=args.label, out=args.output, dpi=args.dpi,
                    show=False, color_fn=color_fn,
                    legend_entries=legend_entries, streets=streets,
+                   zone_definition=zone_definition,
                    overlay_fn=overlay_fn)
             print(f"\nMap saved -> {args.output}")
         size = sum(f.stat().st_size
@@ -517,7 +553,8 @@ def main(argv=None):
                      label_prop=args.label, out=out, dpi=args.dpi,
                      show=False, keep_open=True,
                      color_fn=color_fn, legend_entries=legend_entries,
-                     streets=streets, overlay_fn=overlay_fn)
+                     streets=streets, overlay_fn=overlay_fn,
+                     zone_definition=zone_definition)
         if color_report:
             color_report()
         print()
@@ -530,6 +567,7 @@ def main(argv=None):
     render(layers, title=title, subtitle=subtitle,
            label_prop=args.label, out=out, dpi=args.dpi, show=interactive,
            color_fn=color_fn, legend_entries=legend_entries, streets=streets,
+                   zone_definition=zone_definition,
            overlay_fn=overlay_fn)
     if color_report:
         color_report()

@@ -231,7 +231,8 @@ function initGroups() {
   }
 }
 function makePath(f) {
-  const entry = {g: f.g, bc: f.bc, bg: f.bg, layer: f.layer, ozn: f.ozn,
+  const entry = {g: f.g, bc: f.bc, be: f.be || null, bg: f.bg,
+                 layer: f.layer, ozn: f.ozn,
                  sym: f.sym, t: f.t, b: null};
   if (f.t === 'pt') { entry.x = f.x; entry.y = f.y; entry.b = [f.x, f.y, f.x, f.y]; return entry; }
   const p = new Path2D();
@@ -282,19 +283,21 @@ function draw() {
       ctx.globalAlpha = st.alpha;
       ctx.fillStyle = pf.bc;
       ctx.fill(pf.p, 'evenodd');
-      ctx.globalAlpha = Math.min(1, st.alpha + 0.2);
-      ctx.strokeStyle = darkenHex(pf.bc);
-      ctx.lineWidth = 1 / view.s;
-      ctx.stroke(pf.p);
+      if (!pf.be) {  // zone borders are stroked in a separate top pass
+        ctx.globalAlpha = Math.min(1, st.alpha + 0.2);
+        ctx.strokeStyle = darkenHex(pf.bc);
+        ctx.lineWidth = 1 / view.s;
+        ctx.stroke(pf.p);
+      }
     } else if (pf.t === 'l') {
       ctx.globalAlpha = 1;
-      ctx.strokeStyle = darkenHex(pf.bc);
+      ctx.strokeStyle = pf.be || darkenHex(pf.bc);
       ctx.lineWidth = 1.4 / view.s;
       ctx.stroke(pf.p);
     } else {
       ctx.globalAlpha = 1;
       ctx.fillStyle = pf.bc;
-      ctx.strokeStyle = darkenHex(pf.bc);
+      ctx.strokeStyle = pf.be || darkenHex(pf.bc);
       ctx.lineWidth = 1 / view.s;
       ctx.beginPath();
       ctx.arc(pf.x, pf.y, 6 / view.s, 0, 2 * Math.PI);
@@ -329,6 +332,16 @@ function draw() {
       ctx.arc(pf.x, pf.y, 6 / view.s, 0, 2 * Math.PI);
       ctx.fill(); ctx.stroke();
     }
+  }
+  // zone borders: stroked on top of overlays so they stay visible
+  for (const pf of paths) {
+    if (!pf.be || pf.t !== 'p') continue;
+    const st = state[pf.bg];
+    if (!st || !st.on) continue;
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = pf.be;
+    ctx.lineWidth = 1.2 / view.s;
+    ctx.stroke(pf.p);
   }
   const stS = state['streets'];
   if (stS && stS.on && streets.length) {
@@ -747,7 +760,7 @@ def build_map_payload(features, schema, prop, zone_mapping,
                       title, srs=None, resolve_key=None, streets=None,
                       overlay=False, descriptions=None,
                       page_title=None, note=None, links=None, src=None,
-                      default_off=None):
+                      default_off=None, zone_definition=None):
     """Build the JSON payload for the interactive canvas viewer.
 
     `resolve_key(value) -> schema key or None` decides the group of a feature
@@ -813,9 +826,17 @@ def build_map_payload(features, schema, prop, zone_mapping,
             group = key if key in group_rank else "other"
             bc = color_by_group.get(group, "#dddddd")
             bg = group
+        be = None
+        zdef = (zone_definition or {}).get(
+            (f.props.get("symbol") or "").strip())
+        if zdef:
+            # zone-type feature: definition color + explicit stroke
+            bc = zdef["color"]
+            be = zdef.get("stroke", "#191919")
         base = {
             "g": group,
             "bc": bc,
+            "be": be,
             "bg": bg,
             "layer": f.layer,
             "ozn": (f.props.get(prop) or "").strip(),

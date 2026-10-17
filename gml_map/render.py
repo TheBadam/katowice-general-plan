@@ -103,7 +103,8 @@ def _draw_streets(ax, streets, map_width):
 
 def render(layers: dict[str, list[Feature]], *, title="", subtitle="",
            label_prop=None, out=None, dpi=200, show=True, keep_open=False,
-           color_fn=None, legend_entries=None, streets=None, overlay_fn=None):
+           color_fn=None, legend_entries=None, streets=None, overlay_fn=None,
+           zone_definition=None):
     """Draw all layers; optionally save to `out` and/or show a window.
 
     Returns the path written (or None) and shows the window if requested.
@@ -122,9 +123,15 @@ def render(layers: dict[str, list[Feature]], *, title="", subtitle="",
     for kind in ("polygon", "line", "point"):
         for name in names:
             for f in layers[name]:
+                zdef = (zone_definition or {}).get(
+                    (f.props.get("symbol") or "").strip())
                 if color_fn is not None:
                     c = color_fn(f)
                     ec = tuple(v * 0.55 for v in to_rgb(c))
+                    fc = (*to_rgb(c), 0.62)
+                elif zdef:
+                    c = zdef["color"]
+                    ec = "none"  # zone borders are stroked on top later
                     fc = (*to_rgb(c), 0.62)
                 else:
                     c = colors[name]
@@ -175,6 +182,24 @@ def render(layers: dict[str, list[Feature]], *, title="", subtitle="",
                                        edgecolor=ec, linewidths=0.7,
                                        zorder=_POINT_Z)
 
+    # Zone borders: stroked on top of overlays so they stay visible.
+    if zone_definition:
+        for name in names:
+            for f in layers[name]:
+                zdef = zone_definition.get(
+                    (f.props.get("symbol") or "").strip())
+                if not zdef:
+                    continue
+                for g in _flatten(f.geom):
+                    if _kind(g) != "polygon":
+                        continue
+                    p = _poly_patch(g, "none",
+                                    zdef.get("stroke", "#191919"))
+                    if p is not None:
+                        p.set_linewidth(0.9)
+                        p.set_zorder(_POINT_Z - 0.5)
+                        ax.add_patch(p)
+
     if not drawn:
         plt.close(fig)
         raise ValueError("No drawable geometry found.")
@@ -189,7 +214,21 @@ def render(layers: dict[str, list[Feature]], *, title="", subtitle="",
 
     _draw_streets(ax, streets, dx)
 
-    if legend_entries is not None and overlay_fn is None:
+    if zone_definition:
+        proxies = [
+            Patch(facecolor=z["color"],
+                  edgecolor=z.get("stroke", "#191919"),
+                  label=f"{sym} - {z['title']}")
+            for sym, z in sorted(zone_definition.items())
+        ]
+        if legend_entries is not None:  # overlay groups on top of zones
+            proxies += [
+                Patch(facecolor=c,
+                      edgecolor=tuple(v * 0.55 for v in to_rgb(c)),
+                      label=label)
+                for label, c in legend_entries
+            ]
+    elif legend_entries is not None and overlay_fn is None:
         proxies = [
             Patch(facecolor=c, edgecolor=tuple(v * 0.55 for v in to_rgb(c)),
                   label=label)

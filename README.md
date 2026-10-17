@@ -199,6 +199,7 @@ Try it on the bundled synthetic example:
 | `--colors JSON` | Color schema file; see below |
 | `--zones JSON` | Group definitions (`zones.json`); see below |
 | `--color-prop PROP` | Property matched against the color schema (default: `oznaczenie`) |
+| `--zone-definition JSON` | Paint zone-type features by symbol: fill `color` + `stroke` borders from `zone_definition.json` |
 | `--overlay` | Paint groups as overlays on the original GML rendering |
 | `--default-off GROUP` | Layer/group unchecked by default in the viewer (repeatable) |
 | `--descriptions JSON` | Group descriptions shown in the viewer panel |
