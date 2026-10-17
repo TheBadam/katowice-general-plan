@@ -32,6 +32,7 @@ import tornado.websocket
 from matplotlib._pylab_helpers import Gcf
 from matplotlib.backends import backend_webagg_core as core
 from matplotlib.colors import to_rgb
+from shapely.geometry import LineString
 from shapely.geometry.base import BaseGeometry
 
 _INDEX_HTML = """<!DOCTYPE html>
@@ -114,7 +115,8 @@ _INTERACTIVE_HTML = r"""<!DOCTYPE html>
   #paneltoggle path { fill: none; stroke: #555; stroke-width: 2; }
   #paneltoggle.closed svg { transform: rotate(180deg); }
   #wrap { display: flex; flex: 1; min-height: 0; }
-  #canvas { flex: 1; display: block; cursor: grab; min-width: 0; }
+  #canvas { flex: 1; display: block; cursor: grab; min-width: 0;
+            touch-action: none; }
   #canvas.dragging { cursor: grabbing; }
   #resizer { width: 6px; flex: none; cursor: col-resize;
              background: transparent; }
@@ -187,6 +189,22 @@ _INTERACTIVE_HTML = r"""<!DOCTYPE html>
           max-width: 280px; white-space: normal;
           box-shadow: 2px 2px 6px #0003; }
   #info .desc { color: #555; margin-top: 3px; display: block; }
+  /* small screens: the panel overlays the map instead of squeezing it */
+  @media (max-width: 700px) {
+    #topbar { padding: 6px 10px; }
+    #topbar h1 { font-size: 13px; }
+    #psubtitle { font-size: 11px; }
+    #wrap { position: relative; }
+    #resizer { display: none; }
+    #paneltoggle { position: absolute; top: 0; right: 0; bottom: 0;
+                   z-index: 6; }
+    #panel { position: absolute; top: 0; right: 15px; bottom: 0;
+             z-index: 5; max-width: calc(85vw - 15px);
+             box-shadow: -2px 0 10px #0003; }
+    .zrow { padding: 5px 3px; }
+    .group .head input[type=checkbox] { width: 16px; height: 16px; }
+    .btns button { padding: 8px 6px; }
+  }
 </style>
 </head>
 <body>
@@ -234,6 +252,7 @@ const I18N = {
     zoomIn: 'Zoom in', zoomOut: 'Zoom out', reset: 'Reset view',
     png: 'Download PNG',
     explanation: 'Explanation',
+    loadError: 'Failed to load map data from ',
     layer: 'layer', group: 'group', symbol: 'symbol', data: 'data: '
   },
   pl: {
@@ -243,6 +262,7 @@ const I18N = {
     zoomIn: 'Przybliż', zoomOut: 'Oddal', reset: 'Resetuj widok',
     png: 'Pobierz PNG',
     explanation: 'Wyjaśnienie',
+    loadError: 'Nie udało się wczytać danych mapy z ',
     layer: 'warstwa', group: 'grupa', symbol: 'symbol', data: 'dane: '
   }
 };
@@ -251,6 +271,7 @@ const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 const info = document.getElementById('info');
 let DATA = null, paths = [], streets = [], groups = {};
+let streetsPath = null;  // all streets merged into one Path2D
 const state = {};   // group name -> {on, alpha}
 const view = {s: 1, tx: 0, ty: 0};
 let dpr = 1;
@@ -297,9 +318,11 @@ function hatchPattern(color, widthPx, spacingPx) {
   pat.setTransform(ctx.getTransform().inverse());
   return pat;
 }
-// --- shareable view state in the URL hash ---------------------------
-// Serializes group/zone toggles and opacities into location.hash so a
-// view can be shared by copying the URL. replaceState avoids history spam.
+// --- shareable view state in the URL --------------------------------
+// Serializes group/zone toggles and opacities into the ?s= query
+// parameter so a view can be shared by copying the URL. A query
+// parameter survives social-platform link handling (Instagram etc.
+// can strip #fragments); replaceState avoids history spam.
 let saveTimer = null;
 function saveState() {
   clearTimeout(saveTimer);
@@ -315,15 +338,23 @@ function saveState() {
       out[name] = e;
     }
     history.replaceState(null, '',
-      '#s=' + encodeURIComponent(JSON.stringify(out)));
+      '?s=' + encodeURIComponent(JSON.stringify(out)));
   }, 200);
 }
 function loadState() {
-  const m = location.hash.match(/^[#&]s=([^&]+)/);
-  if (!m) return;
-  let data;
-  try { data = JSON.parse(decodeURIComponent(m[1])); }
-  catch (err) { return; }
+  // accept the state from ?s=... or the legacy #s=... fragment
+  let raw = new URLSearchParams(location.search).get('s');
+  if (!raw) {
+    const m = location.hash.match(/^[#&]s=([^&]+)/);
+    if (m) raw = decodeURIComponent(m[1]);
+  }
+  if (!raw) return;
+  let data = null;
+  try { data = JSON.parse(raw); } catch (err) {}
+  if (!data) {  // tolerate double-encoded values from link wrappers
+    try { data = JSON.parse(decodeURIComponent(raw)); } catch (err) {}
+  }
+  if (!data) return;
   for (const name in data) {
     const s = state[name], d = data[name];
     if (!s || typeof d !== 'object') continue;
@@ -373,7 +404,8 @@ function makePath(f) {
   return entry;
 }
 function resize() {
-  dpr = window.devicePixelRatio || 1;
+  // cap the pixel ratio: dpr 3 phones triple the fill cost for no gain
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
   canvas.width = Math.round(canvas.clientWidth * dpr);
   canvas.height = Math.round(canvas.clientHeight * dpr);
   if (DATA) draw();
@@ -481,11 +513,11 @@ function draw() {
     ctx.stroke(pf.p);
   }
   const stS = state['streets'];
-  if (stS && stS.on && streets.length) {
+  if (stS && stS.on && streetsPath) {
     ctx.globalAlpha = stS.alpha;
     ctx.strokeStyle = groups['streets'].edge;
     ctx.lineWidth = 1.1 / view.s;
-    for (const s of streets) if (visible(s.b)) ctx.stroke(s.p);
+    ctx.stroke(streetsPath);
   }
   ctx.globalAlpha = 1;
   if (stS && stS.on) drawStreetLabels(visible);
@@ -544,7 +576,7 @@ function identify(mx, my) {
       }
       info.innerHTML = html;
       info.style.display = 'block';
-      info.style.left = Math.min(mx + 14, window.innerWidth - 300) + 'px';
+      info.style.left = Math.max(0, Math.min(mx + 14, window.innerWidth - 290)) + 'px';
       info.style.top = (my + 14) + 'px';
       return true;
     }
@@ -695,8 +727,17 @@ function buildPanel() {
   });
 }
 async function load() {
-  const res = await fetch(MAPDATA_URL);
-  DATA = await res.json();
+  let res;
+  try {
+    res = await fetch(MAPDATA_URL);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    DATA = await res.json();
+  } catch (err) {
+    // surface load failures instead of a silent white page
+    document.getElementById('ptitle').textContent =
+      L.loadError + MAPDATA_URL;
+    return;
+  }
   if (DATA.hatch) HATCH = Object.assign(HATCH, DATA.hatch);
   document.title = DATA.page_title || DATA.title;
   document.getElementById('ptitle').textContent = DATA.page_title || DATA.title;
@@ -730,46 +771,77 @@ async function load() {
   }
   initGroups();
   loadState();  // restore a shared view from the URL hash, if any
-  for (const f of DATA.features) paths.push(makePath(f));
+  // build Path2D geometry in chunks, yielding between chunks: keeps the
+  // page responsive on memory-constrained in-app browsers
+  const feats = DATA.features;
+  for (let i = 0; i < feats.length; i += 200) {
+    const end = Math.min(i + 200, feats.length);
+    for (let j = i; j < end; j++) paths.push(makePath(feats[j]));
+    await new Promise(r => setTimeout(r, 0));
+  }
   if (DATA.streets) {
+    // every street shares one stroke style, so merge them all into a
+    // single Path2D instead of one object per street (memory + draw
+    // calls); labels keep their own per-street metadata
+    const sp = new Path2D();
     for (const s of DATA.streets) {
-      const p = new Path2D();
       const r = s.parts[0];
-      p.moveTo(r[0], r[1]);
+      sp.moveTo(r[0], r[1]);
       let minx = 1e18, miny = 1e18, maxx = -1e18, maxy = -1e18;
       const up = (x, y) => { if (x < minx) minx = x; if (y < miny) miny = y;
                              if (x > maxx) maxx = x; if (y > maxy) maxy = y; };
       up(r[0], r[1]);
-      for (let i = 2; i < r.length; i += 2) { p.lineTo(r[i], r[i + 1]); up(r[i], r[i + 1]); }
-      streets.push({p: p, name: s.name, len: s.len, lab: s.lab,
+      for (let i = 2; i < r.length; i += 2) { sp.lineTo(r[i], r[i + 1]); up(r[i], r[i + 1]); }
+      streets.push({name: s.name, len: s.len, lab: s.lab,
                     b: [minx, miny, maxx, maxy]});
     }
+    streetsPath = sp;
   }
+  // the parsed payload is not needed past this point: free it for GC
+  DATA.features = null;
+  DATA.streets = null;
   buildPanel();
   resize(); fit(); draw();
 }
 
+// --- pointer input: mouse drag/hover/click plus touch pan, pinch zoom
+// and tap-to-pin. Pointer events fire for mouse and touch alike.
 let drag = null, pinned = false, hoverRaf = null;
-canvas.addEventListener('mousedown', e => {
-  drag = {x: e.offsetX, y: e.offsetY, moved: false};
-  canvas.classList.add('dragging');
-});
-canvas.addEventListener('mousemove', e => {
-  if (drag || pinned || !DATA) return;
-  lastHover = {x: e.offsetX, y: e.offsetY};
-  if (!hoverRaf) {
-    hoverRaf = requestAnimationFrame(() => {
-      hoverRaf = null;
-      identify(lastHover.x, lastHover.y);
-    });
+let lastHover = {x: 0, y: 0};
+const activePtrs = new Map();  // canvas pointerId -> {x, y}
+let pinch = null;              // two-finger distance at the previous step
+function canvasPos(e) {
+  const r = canvas.getBoundingClientRect();
+  return {x: e.clientX - r.left, y: e.clientY - r.top};
+}
+canvas.addEventListener('pointerdown', e => {
+  activePtrs.set(e.pointerId, {x: e.clientX, y: e.clientY});
+  try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
+  if (activePtrs.size === 1) {
+    drag = {x: e.clientX, y: e.clientY, moved: false};
+    canvas.classList.add('dragging');
+  } else {  // second finger: pinch zoom instead of pan
+    drag = null;
+    pinch = null;
+    canvas.classList.remove('dragging');
   }
 });
-canvas.addEventListener('mouseleave', () => {
-  if (!pinned) info.style.display = 'none';
-});
-let lastHover = {x: 0, y: 0};
-window.addEventListener('mousemove', e => {
-  if (drag) {
+canvas.addEventListener('pointermove', e => {
+  if (!DATA) return;
+  const p = activePtrs.get(e.pointerId);
+  if (p) { p.x = e.clientX; p.y = e.clientY; }
+  if (activePtrs.size >= 2) {  // pinch zoom around the finger midpoint
+    const pts = [...activePtrs.values()];
+    const d = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+    if (pinch !== null && d > 0 && pinch > 0) {
+      const r = canvas.getBoundingClientRect();
+      zoomAt((pts[0].x + pts[1].x) / 2 - r.left,
+             (pts[0].y + pts[1].y) / 2 - r.top, d / pinch);
+    }
+    pinch = d;
+    return;
+  }
+  if (drag) {  // one-pointer pan
     const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
     if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
     if (drag.moved) {
@@ -778,7 +850,48 @@ window.addEventListener('mousemove', e => {
       drag.x = e.clientX; drag.y = e.clientY;
       draw();
     }
-  } else if (resizing) {
+    return;
+  }
+  if (e.pointerType === 'mouse' && !pinned) {  // hover tooltip (mouse)
+    lastHover = canvasPos(e);
+    if (!hoverRaf) {
+      hoverRaf = requestAnimationFrame(() => {
+        hoverRaf = null;
+        identify(lastHover.x, lastHover.y);
+      });
+    }
+  }
+});
+canvas.addEventListener('pointerup', e => {
+  activePtrs.delete(e.pointerId);
+  pinch = null;
+  if (drag) {
+    const moved = drag.moved;
+    drag = null;
+    canvas.classList.remove('dragging');
+    if (!moved) {
+      // click or tap pins/unpins the details shown on hover
+      const cp = canvasPos(e);
+      if (pinned) {
+        pinned = false;
+        info.style.display = 'none';
+      } else {
+        pinned = identify(cp.x, cp.y);
+      }
+    }
+  }
+});
+canvas.addEventListener('pointercancel', e => {
+  activePtrs.delete(e.pointerId);
+  pinch = null;
+  drag = null;
+  canvas.classList.remove('dragging');
+});
+canvas.addEventListener('pointerleave', () => {
+  if (!pinned) info.style.display = 'none';
+});
+window.addEventListener('mousemove', e => {
+  if (resizing) {  // panel width drag (desktop; hidden on touch layouts)
     const w = Math.min(600, Math.max(200,
       resizing.w - (e.clientX - resizing.x)));  // panel is right-anchored
     panel.style.width = w + 'px';
@@ -787,22 +900,7 @@ window.addEventListener('mousemove', e => {
     }
   }
 });
-window.addEventListener('mouseup', e => {
-  if (drag) {
-    const moved = drag.moved;
-    drag = null;
-    canvas.classList.remove('dragging');
-    if (!moved) {
-      const r = canvas.getBoundingClientRect();
-      // click pins/unpins the details shown on hover
-      if (pinned) {
-        pinned = false;
-        info.style.display = 'none';
-      } else {
-        pinned = identify(e.clientX - r.left, e.clientY - r.top);
-      }
-    }
-  }
+window.addEventListener('mouseup', () => {
   if (resizing) {
     resizing = null;
     resizer.classList.remove('active');
@@ -1009,7 +1107,8 @@ def build_map_payload(features, schema, prop, zone_mapping,
                       page_title=None, page_subtitle=None, note=None,
                       links=None, src=None,
                       default_off=None, zone_definition=None, hatch=None,
-                      default_alpha=None, layer_names=None):
+                      default_alpha=None, layer_names=None,
+                      street_tolerance=None):
     """Build the JSON payload for the interactive canvas viewer.
 
     `resolve_key(value) -> schema key or None` decides the group of a feature
@@ -1023,6 +1122,9 @@ def build_map_payload(features, schema, prop, zone_mapping,
     the initial position of the per-group opacity slider.
     `layer_names`: optional {raw layer name: display name}; the key order
     sets the display order of the layer controls in the viewer panel.
+    `street_tolerance`: optional Douglas-Peucker tolerance (CRS units)
+    simplifying street geometry in the payload; trims its size and the
+    memory needed to load it in the browser.
     `hatch`: app-level hatch config for overlay groups (no UI control):
     {"width": line thickness in px, "spacing": line distance in px,
     "fill": opacity 0..1 of the solid color between the lines}. Defaults
@@ -1175,6 +1277,11 @@ def build_map_payload(features, schema, prop, zone_mapping,
             pts = s["coords"]
             if len(pts) < 2:
                 continue
+            if street_tolerance:  # simplify street geometry (memory)
+                pts = list(LineString(pts).simplify(
+                    street_tolerance, preserve_topology=False).coords)
+                if len(pts) < 2:
+                    continue
             flat = []
             length = 0.0
             best = None  # longest segment for the label

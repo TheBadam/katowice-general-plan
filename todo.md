@@ -5,7 +5,6 @@ on hover show details for an element
 title the page: Plan Ogólny Katowice 2026
 subtitle: Potencjalne zagrożenia stanu środowiska, mogących wystąpić w wyniku realizacji Planu Ogólnego. Na bazie "Prognozy oddziaływania na środowisko projektu Planu Ogólnego miasta Katowice", dr Grzegorz Synowiec, Katowice 04.10.2026r.
 webgl to render
-make mobile friendly
 
 Done:
 make StrefaPlanistyczna selected by default
@@ -28,3 +27,4 @@ tri-state zone layer checkbox: on / off / "-" (mixed zone selection)
 tri-state "all" master toggle for the environmental impact groups
 viewport culling in the canvas draw loop
 shareable view state (toggles, zones, opacities) in the URL hash
+mobile friendly: pointer events with pinch zoom and tap-to-pin, overlay panel layout on small screens, dpr capped at 2

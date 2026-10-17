@@ -218,3 +218,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+# exported static site and its downloadable archive
+static_site/
+static_site.zip
+static_site.7z

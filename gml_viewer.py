@@ -435,6 +435,11 @@ def main(argv=None):
     p.add_argument("--streets", metavar="GEOJSON",
                    help="overlay named streets from a GeoJSON file "
                         "(see fetch_streets.py)")
+    p.add_argument("--street-simplify", type=float, default=1.0,
+                   metavar="TOL",
+                   help="Douglas-Peucker tolerance for street geometry in "
+                        "the interactive viewer, in CRS units "
+                        "(0 = off; default 1)")
     p.add_argument("--geojson", metavar="PATH", help="export features to GeoJSON")
     p.add_argument("--swap-xy", dest="swap", action="store_true", default=None,
                    help="force swapping coordinate pairs (axis order fix)")
@@ -604,7 +609,8 @@ def main(argv=None):
             src=Path(args.input).name,
             default_off=args.default_off or None,
             default_alpha=default_alpha,
-            layer_names=layer_names)
+            layer_names=layer_names,
+            street_tolerance=(args.street_simplify or None))
 
     if args.export_static:
         from gml_map.webapp import export_static

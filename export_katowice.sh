@@ -2,9 +2,12 @@
 # Export the interactive "Environmental impact on Katowice plan" viewer as a
 # static site into static_site/ - no server is started, no Python is needed
 # to host the result. Extra arguments are passed to gml_viewer.py
-# (e.g. -o map.png for a preview image).
+# (e.g. -o map.png for a preview image). The exported site is also bundled
+# into a single downloadable archive: static_site.7z when 7z is installed,
+# otherwise static_site.zip (via Python, no extra tools needed).
 cd "$(dirname "$0")"
-exec .venv/bin/python gml_viewer.py katowice_plan_ogolny_26.gml \
+
+.venv/bin/python gml_viewer.py katowice_plan_ogolny_26.gml \
     --zones zones.json \
     --colors group_definitions.json \
     --overlay \
@@ -22,3 +25,18 @@ exec .venv/bin/python gml_viewer.py katowice_plan_ogolny_26.gml \
     --page-link "Environmental report=https://planogolnydlakatowic.pl/" \
     --page-link "GML registry=https://rejestr-urbanistyczny.gov.pl/published/details/pog/4521" \
     --export-static static_site "$@"
+status=$?
+
+# bundle the exported site into one downloadable archive
+if [ $status -eq 0 ]; then
+    if command -v 7z >/dev/null 2>&1; then
+        rm -f static_site.7z
+        7z a -bd static_site.7z ./static_site >/dev/null \
+            && echo "Downloadable archive -> static_site.7z"
+    else
+        rm -f static_site.zip
+        .venv/bin/python -c "import shutil; shutil.make_archive('static_site', 'zip', '.', 'static_site')" \
+            && echo "Downloadable archive -> static_site.zip"
+    fi
+fi
+exit $status
