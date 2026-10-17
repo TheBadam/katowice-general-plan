@@ -265,11 +265,18 @@ function draw() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.setTransform(view.s * dpr, 0, 0, -view.s * dpr, view.tx * dpr, view.ty * dpr);
   ctx.lineJoin = 'round';
+  // viewport culling: only draw features intersecting the visible world rect
+  const vw = canvas.width / dpr, vh = canvas.height / dpr;
+  const vx0 = -view.tx / view.s, vx1 = (vw - view.tx) / view.s;
+  const vy0 = (view.ty - vh) / view.s, vy1 = view.ty / view.s;
+  const visible = b =>
+    b[2] >= vx0 && b[0] <= vx1 && b[3] >= vy0 && b[1] <= vy1;
   // base pass: every feature in its base color, controlled by its base group
   for (const pf of paths) {
     const st = state[pf.bg];
     if (!st || !st.on) continue;
     if (st.zones && pf.sym && st.zones[pf.sym] === false) continue;
+    if (!visible(pf.b)) continue;
     if (pf.t === 'p') {
       // pf.ba: zone-definition initial fill transparency; the group's
       // opacity slider scales this initial level
@@ -305,6 +312,7 @@ function draw() {
     if (!pf.g) continue;
     const st = state[pf.g];
     if (!st || !st.on) continue;
+    if (!visible(pf.b)) continue;
     const gr = groups[pf.g];
     if (pf.t === 'p') {
       if (HATCH.fill > 0) {  // optional solid fill between the lines
@@ -340,6 +348,7 @@ function draw() {
     const st = state[pf.bg];
     if (!st || !st.on) continue;
     if (st.zones && pf.sym && st.zones[pf.sym] === false) continue;
+    if (!visible(pf.b)) continue;
     ctx.globalAlpha = 1;
     ctx.strokeStyle = pf.be;
     ctx.lineWidth = 1.2 / view.s;
@@ -350,16 +359,17 @@ function draw() {
     ctx.globalAlpha = stS.alpha;
     ctx.strokeStyle = groups['streets'].edge;
     ctx.lineWidth = 1.1 / view.s;
-    for (const s of streets) ctx.stroke(s.p);
+    for (const s of streets) if (visible(s.b)) ctx.stroke(s.p);
   }
   ctx.globalAlpha = 1;
-  if (stS && stS.on) drawStreetLabels();
+  if (stS && stS.on) drawStreetLabels(visible);
 }
-function drawStreetLabels() {
+function drawStreetLabels(visible) {
   // draw in CSS pixels: scale the backing store by dpr (devicePixelRatio)
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.font = '10px system-ui, sans-serif';
   for (const s of streets) {
+    if (!visible(s.b)) continue;
     if (s.len * view.s < 90) continue;  // too short at this zoom
     const ax = view.tx + view.s * s.lab[0], ay = view.ty - view.s * s.lab[1];
     const bx = view.tx + view.s * s.lab[2], by = view.ty - view.s * s.lab[3];
@@ -584,8 +594,13 @@ async function load() {
       const p = new Path2D();
       const r = s.parts[0];
       p.moveTo(r[0], r[1]);
-      for (let i = 2; i < r.length; i += 2) p.lineTo(r[i], r[i + 1]);
-      streets.push({p: p, name: s.name, len: s.len, lab: s.lab});
+      let minx = 1e18, miny = 1e18, maxx = -1e18, maxy = -1e18;
+      const up = (x, y) => { if (x < minx) minx = x; if (y < miny) miny = y;
+                             if (x > maxx) maxx = x; if (y > maxy) maxy = y; };
+      up(r[0], r[1]);
+      for (let i = 2; i < r.length; i += 2) { p.lineTo(r[i], r[i + 1]); up(r[i], r[i + 1]); }
+      streets.push({p: p, name: s.name, len: s.len, lab: s.lab,
+                    b: [minx, miny, maxx, maxy]});
     }
   }
   buildPanel();
