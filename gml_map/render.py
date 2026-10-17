@@ -132,7 +132,8 @@ def render(layers: dict[str, list[Feature]], *, title="", subtitle="",
                 elif zdef:
                     c = zdef["color"]
                     ec = "none"  # zone borders are stroked on top later
-                    fc = (*to_rgb(c), 0.62)
+                    # zdef "alpha": initial fill transparency of the zone
+                    fc = (*to_rgb(c), 0.62 * float(zdef.get("alpha", 1.0)))
                 else:
                     c = colors[name]
                     ec = edge[name]
@@ -220,6 +221,7 @@ def render(layers: dict[str, list[Feature]], *, title="", subtitle="",
                   edgecolor=z.get("stroke", "#191919"),
                   label=f"{sym} - {z['title']}")
             for sym, z in sorted(zone_definition.items())
+            if sym != "global_hatch"  # hatch config entry, not a zone
         ]
         if legend_entries is not None:  # overlay groups on top of zones
             proxies += [

@@ -213,6 +213,10 @@ let DATA = null, paths = [], streets = [], groups = {};
 const state = {};   // group name -> {on, alpha}
 const view = {s: 1, tx: 0, ty: 0};
 let dpr = 1, labelsOn = true;
+// hatch configuration for overlay groups: app-level only (from mapdata),
+// no UI. width/spacing in CSS px; fill = opacity of the solid color
+// between the hatch lines (0 = transparent).
+let HATCH = {width: 2.5, spacing: 16, fill: 0};
 
 function esc(s) {
   return String(s).replace(/[&<>"]/g, c =>
@@ -223,6 +227,34 @@ function darkenHex(h) {
   if (h.length === 3) h = h.split('').map(c => c + c).join('');
   const f = c => Math.round(parseInt(c, 16) * 0.6);
   return 'rgb(' + f(h.slice(0, 2)) + ',' + f(h.slice(2, 4)) + ',' + f(h.slice(4, 6)) + ')';
+}
+// 45-degree hatch patterns for group overlays: colored "/" lines on a
+// transparent background. Line thickness and spacing (CSS px) come from
+// the app configuration (HATCH); tile spacing is spacing*sqrt(2) so the
+// line distance equals the configured value. Anchored to the screen via
+// the inverse of the current view transform, so line width and spacing
+// stay constant while panning and zooming.
+const hatchCache = {};
+function hatchPattern(color, widthPx, spacingPx) {
+  const key = color + '|' + widthPx + '|' + spacingPx + '|' + dpr;
+  let pat = hatchCache[key];
+  if (!pat) {
+    const s = Math.max(8, Math.round(spacingPx * Math.SQRT2 * dpr));
+    const tile = document.createElement('canvas');
+    tile.width = tile.height = s;
+    const t = tile.getContext('2d');
+    t.strokeStyle = color;
+    t.lineWidth = Math.max(1, widthPx * dpr);
+    t.beginPath();
+    // seamless family of lines x + y = s/2 + n*s: two segments per tile
+    t.moveTo(-2, s / 2 + 2); t.lineTo(s / 2 + 2, -2);
+    t.moveTo(s / 2 - 2, s + 2); t.lineTo(s + 2, s / 2 - 2);
+    t.stroke();
+    pat = ctx.createPattern(tile, 'repeat');
+    hatchCache[key] = pat;
+  }
+  pat.setTransform(ctx.getTransform().inverse());
+  return pat;
 }
 function initGroups() {
   for (const g of DATA.groups) {
@@ -280,7 +312,9 @@ function draw() {
     const st = state[pf.bg];
     if (!st || !st.on) continue;
     if (pf.t === 'p') {
-      ctx.globalAlpha = st.alpha;
+      // pf.ba: zone-definition initial fill transparency; the group's
+      // opacity slider scales this initial level
+      ctx.globalAlpha = st.alpha * (pf.ba === undefined ? 1 : pf.ba);
       ctx.fillStyle = pf.bc;
       ctx.fill(pf.p, 'evenodd');
       if (!pf.be) {  // zone borders are stroked in a separate top pass
@@ -304,27 +338,35 @@ function draw() {
       ctx.fill(); ctx.stroke();
     }
   }
-  // overlay pass: group overlays painted on top of the base rendering
+  // overlay pass: group overlays painted on top of the base rendering;
+  // polygons are hatched with the group color (app-configured width,
+  // spacing and fill). The per-group opacity slider is the group's total
+  // opacity: it scales fill, hatch lines and edge together (base 1).
   for (const pf of paths) {
     if (!pf.g) continue;
     const st = state[pf.g];
     if (!st || !st.on) continue;
     const gr = groups[pf.g];
     if (pf.t === 'p') {
+      if (HATCH.fill > 0) {  // optional solid fill between the lines
+        ctx.globalAlpha = HATCH.fill * st.alpha;
+        ctx.fillStyle = gr.color;
+        ctx.fill(pf.p, 'evenodd');
+      }
       ctx.globalAlpha = st.alpha;
-      ctx.fillStyle = gr.color;
+      ctx.fillStyle = hatchPattern(gr.color, HATCH.width, HATCH.spacing);
       ctx.fill(pf.p, 'evenodd');
-      ctx.globalAlpha = Math.min(1, st.alpha + 0.2);
+      ctx.globalAlpha = st.alpha;
       ctx.strokeStyle = gr.edge;
       ctx.lineWidth = 1 / view.s;
       ctx.stroke(pf.p);
     } else if (pf.t === 'l') {
-      ctx.globalAlpha = 1;
+      ctx.globalAlpha = st.alpha;
       ctx.strokeStyle = gr.edge;
       ctx.lineWidth = 1.4 / view.s;
       ctx.stroke(pf.p);
     } else {
-      ctx.globalAlpha = 1;
+      ctx.globalAlpha = st.alpha;
       ctx.fillStyle = gr.color;
       ctx.strokeStyle = gr.edge;
       ctx.lineWidth = 1 / view.s;
@@ -413,22 +455,34 @@ function identify(mx, my) {
   info.style.display = 'none';
   return false;
 }
+function swatchBackground(g) {
+  // preview the group's 45-degree hatch (configured width + spacing)
+  return g.kind === 'group'
+    ? 'repeating-linear-gradient(135deg,' + g.color + ' 0 ' + HATCH.width + 'px,' +
+      'transparent ' + HATCH.width + 'px ' + (HATCH.width + HATCH.spacing) + 'px)'
+    : g.color;
+}
 function groupBlock(g, counts) {
-  const a = g.alpha || 0.62;
+  const st = state[g.name];
   const on = g.on !== false;
   if (g.name === 'streets') counts[g.name] = streets.length;
-  return '<div class="group' + (on ? '' : ' off') + '" id="grp-' + esc(g.name) + '" title="' + esc(g.name) + '">' +
+  const range = (attr, label, min, max, step, val) =>
+    '<input type="range" min="' + min + '" max="' + max + '" step="' + step +
+    '" value="' + val + '" data-' + attr + '="' + esc(g.name) +
+    '" data-label="' + esc(label) + '">' +
+    '<div class="hint">' + label + ' ' + val + '</div>';
+  let html = '<div class="group' + (on ? '' : ' off') + '" id="grp-' + esc(g.name) + '" title="' + esc(g.name) + '">' +
     '<div class="head">' +
     '<input type="checkbox"' + (on ? ' checked' : '') + ' data-toggle="' + esc(g.name) + '">' +
-    '<span class="swatch" style="background:' + g.color + '"></span>' +
+    '<span class="swatch" style="background:' + swatchBackground(g) + '"></span>' +
     '<label>' + esc(g.name) +
     ' <span class="cnt">' + (counts[g.name] || 0) + '</span></label></div>' +
     (g.desc_title ? '<div class="gtitle">' + esc(g.desc_title) + '</div>' : '') +
-    '<input type="range" min="0.05" max="1" step="0.01" value="' + a + '" data-alpha="' + esc(g.name) + '">' +
-    '<div class="hint">' + L.opacity + ' ' + a + '</div>' +
+    range('alpha', L.opacity, '0.05', '1', '0.01', st.alpha) +
     (g.desc ? '<details class="gdetails"><summary>' + L.details + '</summary><div>' +
       esc(g.desc) + '</div></details>' : '') +
     '</div>';
+  return html;
 }
 
 function buildPanel() {
@@ -458,7 +512,8 @@ function buildPanel() {
   document.querySelectorAll('[data-alpha]').forEach(el => {
     el.addEventListener('input', () => {
       state[el.dataset.alpha].alpha = parseFloat(el.value);
-      el.parentElement.querySelector('.hint').textContent = L.opacity + ' ' + el.value;
+      el.parentElement.querySelector('.hint').textContent =
+        el.dataset.label + ' ' + el.value;
       draw();
     });
   });
@@ -471,6 +526,7 @@ function buildPanel() {
 async function load() {
   const res = await fetch(MAPDATA_URL);
   DATA = await res.json();
+  if (DATA.hatch) HATCH = Object.assign(HATCH, DATA.hatch);
   document.title = DATA.page_title || DATA.title;
   document.getElementById('ptitle').textContent = DATA.page_title || DATA.title;
   document.getElementById('zoomin').textContent = L.zoomIn;
@@ -760,7 +816,7 @@ def build_map_payload(features, schema, prop, zone_mapping,
                       title, srs=None, resolve_key=None, streets=None,
                       overlay=False, descriptions=None,
                       page_title=None, note=None, links=None, src=None,
-                      default_off=None, zone_definition=None):
+                      default_off=None, zone_definition=None, hatch=None):
     """Build the JSON payload for the interactive canvas viewer.
 
     `resolve_key(value) -> schema key or None` decides the group of a feature
@@ -770,9 +826,25 @@ def build_map_payload(features, schema, prop, zone_mapping,
     individually controllable base layers and groups are painted on top;
     if False, groups replace the colors.
     `descriptions`: optional {group name: description text} shown in the UI.
+    `hatch`: app-level hatch config for overlay groups (no UI control):
+    {"width": line thickness in px, "spacing": line distance in px,
+    "fill": opacity 0..1 of the solid color between the lines}. Defaults
+    to the reserved "global_hatch" entry of `zone_definition`, which
+    names the fill opacity "alpha".
     """
     if resolve_key is None:
         raise ValueError("resolve_key callback is required")
+
+    src = hatch or (zone_definition or {}).get("global_hatch") or {}
+    hatch = {
+        "width": float(src.get("width", 2.5)),
+        "spacing": float(src.get("spacing", 16.0)),
+        "fill": float(src.get("alpha", src.get("fill", 0.0))),
+    }
+    if hatch["width"] <= 0 or hatch["spacing"] <= 0:
+        raise ValueError("hatch width and spacing must be positive")
+    if not 0 <= hatch["fill"] <= 1:
+        raise ValueError("hatch fill must be a number in [0, 1]")
 
     if overlay:
         # the original per-layer colors form individually controllable
@@ -785,7 +857,7 @@ def build_map_payload(features, schema, prop, zone_mapping,
                    "edge": _darken(base_color[n]), "alpha": 0.62,
                    "kind": "layer"}
                   for n in layer_names]
-        groups += [{"name": k, "color": v, "edge": _darken(v), "alpha": 0.62,
+        groups += [{"name": k, "color": v, "edge": _darken(v), "alpha": 1.0,
                     "kind": "group"}
                    for k, v in schema.items() if k != "_default"]
         color_by_group = {g["name"]: g["color"] for g in groups}
@@ -830,7 +902,9 @@ def build_map_payload(features, schema, prop, zone_mapping,
         zdef = (zone_definition or {}).get(
             (f.props.get("symbol") or "").strip())
         if zdef:
-            # zone-type feature: definition color + explicit stroke
+            # zone-type feature: definition color + explicit stroke; the
+            # optional "alpha" is its initial fill transparency (the UI
+            # opacity slider scales this level)
             bc = zdef["color"]
             be = zdef.get("stroke", "#191919")
         base = {
@@ -842,6 +916,8 @@ def build_map_payload(features, schema, prop, zone_mapping,
             "ozn": (f.props.get(prop) or "").strip(),
             "sym": f.props.get("symbol", ""),
         }
+        if zdef:
+            base["ba"] = round(float(zdef.get("alpha", 1.0)), 3)
         for g in _flatten_geom(f.geom):
             kind = _kind_of(g)
             if kind == "p":
@@ -869,6 +945,7 @@ def build_map_payload(features, schema, prop, zone_mapping,
         "bounds": [xmin, ymin, xmax, ymax],
         "groups": groups,
         "features": entries,
+        "hatch": hatch,
     }
     if streets:
         # streets are not a color group feature; add their group for the UI

@@ -291,7 +291,14 @@ def load_streets(path):
 
 
 def load_zone_definition(path):
-    """Load zone_definition.json: {symbol: {"title", "color", "stroke"}}."""
+    """Load zone_definition.json: {symbol: {"title", "color", "stroke"}}.
+
+    The optional per-symbol "alpha" (0..1) is a zone's initial fill
+    transparency; the viewer's opacity slider scales this level.
+    The reserved "global_hatch" key is the app-level hatch configuration
+    of overlay groups: {"width": px, "spacing": px, "alpha": 0..1}, where
+    alpha is the opacity of the fill between the hatch lines.
+    """
     from matplotlib.colors import to_rgb
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -301,6 +308,21 @@ def load_zone_definition(path):
         sys.exit(f"Error: {path} must map symbols to "
                  '{"title": ..., "color": ..., "stroke": ...}')
     for sym, z in data.items():
+        if sym == "global_hatch":  # app-level hatch config, not a zone
+            if not isinstance(z, dict):
+                sys.exit(f"Error: {path}: global_hatch must be an object")
+            for k in ("width", "spacing"):
+                v = z.get(k)
+                if v is not None and (not isinstance(v, (int, float))
+                                      or not v > 0):
+                    sys.exit(f"Error: {path}: global_hatch {k} must be a "
+                             "positive number")
+            a = z.get("alpha")
+            if a is not None and (not isinstance(a, (int, float))
+                                  or not 0 <= a <= 1):
+                sys.exit(f"Error: {path}: global_hatch alpha must be a "
+                         "number in [0, 1]")
+            continue
         if not isinstance(z, dict) or "title" not in z or "color" not in z:
             sys.exit(f"Error: {path}: entry {sym!r} needs title and color")
         try:
@@ -308,6 +330,10 @@ def load_zone_definition(path):
             to_rgb(z.get("stroke", "#191919"))
         except (ValueError, TypeError):
             sys.exit(f"Error: {path}: invalid color in entry {sym!r}")
+        alpha = z.get("alpha", 1.0)
+        if not isinstance(alpha, (int, float)) or not 0 <= alpha <= 1:
+            sys.exit(f"Error: {path}: entry {sym!r} alpha must be "
+                     "a number in [0, 1]")
     return data
 
 
