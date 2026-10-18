@@ -95,6 +95,32 @@ The page fetches `mapdata.json` relative to its own URL (one directory up
 for the language folders), so it works at any path. Pre-generate a preview
 PNG with `-o map.png` in the same command.
 
+**Gzip compression (optional).** `mapdata.json` (~8 MB) gzips to about a
+quarter of its size, and most hosts compress text responses
+automatically. On Apache-based shared hosting where compression is off
+by default (e.g. OVH), add these lines to the server's `.htaccess`
+(Apache applies it recursively, so a directory above the site files
+works too):
+
+```apache
+<IfModule mod_deflate.c>
+  AddOutputFilterByType DEFLATE application/json text/html text/css application/javascript image/svg+xml
+</IfModule>
+```
+
+FTP clients hide dotfiles by default - enable "show hidden files" when
+editing or uploading it. To verify that compression is active:
+
+```bash
+curl -s -o /dev/null -w '%{size_download} bytes\n' \
+    -H 'Accept-Encoding: gzip' https://host/mapdata.json
+```
+
+About 2 MB means gzip is working; about 8 MB means the response is
+uncompressed. If the lines are in the server's `.htaccess` and the size
+stays at 8 MB, the host is ignoring the directive and compression must
+be enabled host-side instead.
+
 For the Katowice plan there is a launcher that exports the static site
 without starting any server:
 
