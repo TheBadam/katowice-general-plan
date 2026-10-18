@@ -76,7 +76,8 @@ opacity, hover details, street names, descriptions, PNG download) works
 identically. The panel is organized into sections ("GML layers",
 "Environmental impact", "Streets") and the UI language follows the URL:
 `/en/` (English), `/pl/` (Polish), or auto-detected from the browser at any
-other path - use the EN/PL switcher in the panel to move between them:
+other path (Polish by default, English for English browser locales) - use
+the EN/PL switcher in the panel to move between them:
 
 ```bash
 .venv/bin/python gml_viewer.py plan.gml --zones zones.json \
@@ -94,6 +95,15 @@ python3 -m http.server -d static_site 8000    # development preview
 The page fetches `mapdata.json` relative to its own URL (one directory up
 for the language folders), so it works at any path. Pre-generate a preview
 PNG with `-o map.png` in the same command.
+
+All viewer UI labels (panel section headers, buttons, tooltips, the load
+error message) live in one config file, `i18n.json`, passed with `--i18n`
+and layered over the built-in EN/PL set; without it the built-in set is
+used. Page links translate as well: a `--page-link KEY=URL` entry shows
+the current language's `link.KEY` label from `i18n.json`, falling back to
+the raw name when there is no such entry. The language still follows the
+URL (`/en/`, `/pl/`); auto-detected
+visitors get Polish, except for English browser locales.
 
 **Gzip compression (optional).** `mapdata.json` (~8 MB) gzips to about a
 quarter of its size, and most hosts compress text responses
@@ -203,6 +213,7 @@ Try it on the bundled synthetic example:
 | `--page-note FILE` | Plain text shown in a collapsible "Explanation" block |
 | `--page-link NAME=URL` | Link shown at the top of the page (repeatable) |
 | `--streets GEOJSON` | Overlay named streets (see fetch_streets.py) |
+| `--i18n JSON` | Viewer UI labels `{lang: {key: text}}` layered over the built-in EN/PL set (e.g. `i18n.json`) |
 | `--geojson PATH` | Export features to GeoJSON |
 | `--swap-xy` | Force swapping coordinate pairs (fix axis order manually) |
 | `--no-swap` | Disable automatic axis-order correction |

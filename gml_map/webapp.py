@@ -168,33 +168,15 @@ _INTERACTIVE_HTML = r"""<!DOCTYPE html>
 <div id="info"></div>
 <script>
 "use strict";
-// language from the URL path (/en/ or /pl/), else browser language
+// language from the URL path (/en/ or /pl/); otherwise Polish, except
+// for browsers reporting an English locale
 const langMatch = location.pathname.match(/\/(en|pl)(\/|$)/);
 const LANG = langMatch ? langMatch[1]
-  : ((navigator.language || 'en').toLowerCase().startsWith('pl') ? 'pl' : 'en');
+  : ((navigator.language || 'pl').toLowerCase().startsWith('en') ? 'en' : 'pl');
 const MAPDATA_URL = (langMatch ? '../' : '') + 'mapdata.json';
-const I18N = {
-  en: {
-    secLayers: 'GML layers', secGroups: 'Environmental impact',
-    secStreets: 'Streets', opacity: 'opacity', details: 'details',
-    language: 'Language', links: 'Links',
-    zoomIn: 'Zoom in', zoomOut: 'Zoom out', reset: 'Reset view',
-    png: 'Download PNG',
-    explanation: 'Explanation',
-    loadError: 'Failed to load map data from ',
-    layer: 'layer', group: 'group', symbol: 'symbol', data: 'data: '
-  },
-  pl: {
-    secLayers: 'Warstwy GML', secGroups: 'Oddziaływanie na środowisko',
-    secStreets: 'Ulice', opacity: 'przezroczystość', details: 'szczegóły',
-    language: 'Język', links: 'Linki',
-    zoomIn: 'Przybliż', zoomOut: 'Oddal', reset: 'Resetuj widok',
-    png: 'Pobierz PNG',
-    explanation: 'Wyjaśnienie',
-    loadError: 'Nie udało się wczytać danych mapy z ',
-    layer: 'warstwa', group: 'grupa', symbol: 'symbol', data: 'dane: '
-  }
-};
+// UI labels: injected at export time from the built-in EN/PL set,
+// optionally overridden via --i18n (see i18n.json)
+const I18N = __I18N__;
 const L = I18N[LANG] || I18N.en;
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
@@ -533,7 +515,7 @@ function groupBlock(g, counts) {
     '<div class="head">' +
     '<input type="checkbox"' + (on ? ' checked' : '') + ' data-toggle="' + esc(g.name) + '">' +
     '<span class="swatch" style="background:' + swatchBackground(g) + '"></span>' +
-    '<label>' + esc(g.label || g.name) +
+    '<label>' + esc(g.kind === 'streets' ? L.secStreets : (g.label || g.name)) +
     ' <span class="cnt">' + (counts[g.name] || 0) + '</span></label></div>' +
     (g.desc_title ? '<div class="gtitle">' + esc(g.desc_title) + '</div>' : '') +
     // zone-type toggles: full names in a two-column grid, color-coded
@@ -692,7 +674,8 @@ async function load() {
     document.getElementById('plinks').innerHTML =
       '<span class="plabel">' + esc(L.links) + '</span>' +
       DATA.links.map(l => '<a href="' + esc(l.url) +
-        '" target="_blank" rel="noopener">' + esc(l.name) + '</a>').join('');
+        '" target="_blank" rel="noopener">' +
+        esc(L['link.' + l.name] || l.name) + '</a>').join('');
   }
   if (DATA.note) {
     document.getElementById('pnote').style.display = 'block';
@@ -1170,26 +1153,83 @@ def build_map_payload(features, schema, prop, zone_mapping,
     return payload
 
 
-def interactive_page_html():
+# Built-in UI labels for the viewer page (the keys the page script looks
+# up); --i18n (see i18n.json) layers overrides on top of this set.
+DEFAULT_I18N = {
+    "en": {
+        "secLayers": "GML layers",
+        "secGroups": "Environmental impact",
+        "secStreets": "Streets",
+        "opacity": "opacity",
+        "details": "details",
+        "language": "Language",
+        "links": "Links",
+        "zoomIn": "Zoom in",
+        "zoomOut": "Zoom out",
+        "reset": "Reset view",
+        "png": "Download PNG",
+        "explanation": "Explanation",
+        "loadError": "Failed to load map data from ",
+        "layer": "layer",
+        "group": "group",
+        "symbol": "symbol",
+        "data": "data: ",
+    },
+    "pl": {
+        "secLayers": "Warstwy GML",
+        "secGroups": "Oddziaływanie na środowisko",
+        "secStreets": "Ulice",
+        "opacity": "przezroczystość",
+        "details": "szczegóły",
+        "language": "Język",
+        "links": "Linki",
+        "zoomIn": "Przybliż",
+        "zoomOut": "Oddal",
+        "reset": "Resetuj widok",
+        "png": "Pobierz PNG",
+        "explanation": "Wyjaśnienie",
+        "loadError": "Nie udało się wczytać danych mapy z ",
+        "layer": "warstwa",
+        "group": "grupa",
+        "symbol": "symbol",
+        "data": "dane: ",
+    },
+}
+
+
+def merged_i18n(override=None):
+    """DEFAULT_I18N updated with {lang: {key: text}} entries of `override`."""
+    i18n = {lang: dict(labels) for lang, labels in DEFAULT_I18N.items()}
+    for lang, labels in (override or {}).items():
+        i18n.setdefault(lang, {}).update(labels)
+    return i18n
+
+
+def interactive_page_html(i18n=None):
     """The interactive viewer page for the static export.
 
+    `i18n`: optional {lang: {key: text}} UI labels layered over the
+    built-in EN/PL set; embedded into the page as JSON.
     The mapdata URL and the language are computed client-side from the page
     URL, so the same HTML works at any path (incl. /en/ and /pl/ subpaths).
     """
-    return _INTERACTIVE_HTML.replace("__CLASSIC_LINK__", "")
+    html = _INTERACTIVE_HTML.replace(
+        "__I18N__", json.dumps(merged_i18n(i18n), ensure_ascii=False))
+    return html.replace("__CLASSIC_LINK__", "")
 
 
-def export_static(payload, out_dir):
+def export_static(payload, out_dir, i18n=None):
     """Write a fully static copy of the interactive viewer to `out_dir`.
 
     Produces index.html (auto language) plus en/ and pl/ copies, and
     mapdata.json; hostable on any static file server (nginx, GitHub Pages,
-    S3, ...). No Python is needed at serving time.
+    S3, ...). `i18n` overrides the built-in UI labels ({lang: {key: text}},
+    see i18n.json). No Python is needed at serving time.
     Returns the index.html path.
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    html = interactive_page_html()
+    html = interactive_page_html(i18n)
     (out / "index.html").write_text(html, encoding="utf-8")
     for lang in ("en", "pl"):
         sub = out / lang

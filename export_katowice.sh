@@ -17,13 +17,14 @@ cd "$(dirname "$0")"
     --default-alpha StrefaPlanistyczna=0.75 \
     --default-alpha ObszarUzupelnieniaZabudowy=0.75 \
     --layer-names layer_names.json \
+    --i18n i18n.json \
     --streets streets.geojson \
     --descriptions zones_description.json \
-    --page-title "Potencjalne zagrożenia stanu środowiska, mogących wystąpić w wyniku realizacji Planu Ogólnego." \
-    --page-subtitle "Na bazie \"Prognozy oddziaływania na środowisko projektu Planu Ogólnego miasta Katowice\", dr Grzegorz Synowiec, Katowice 04.10.2026r" \
+    --page-title "Potencjalne zagrożenia stanu środowiska, mogące wystąpić w wyniku realizacji Planu Ogólnego." \
+    --page-subtitle "Na bazie \"Prognozy oddziaływania na środowisko projektu Planu Ogólnego miasta Katowice\",dr Grzegorz Synowiec, Katowice 04.10.2026r" \
     --page-note page_note.txt \
-    --page-link "Environmental report=https://planogolnydlakatowic.pl/" \
-    --page-link "GML registry=https://rejestr-urbanistyczny.gov.pl/published/details/pog/4521" \
+    --page-link "report=https://planogolnydlakatowic.pl/" \
+    --page-link "registry=https://rejestr-urbanistyczny.gov.pl/published/details/pog/4521" \
     --export-static static_site "$@"
 status=$?
 

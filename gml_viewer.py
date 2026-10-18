@@ -363,6 +363,22 @@ def load_layer_names(path):
     return data
 
 
+def load_i18n(path):
+    """Load i18n.json: {lang: {label key: text}} for the viewer UI."""
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        sys.exit(f"Error: cannot load {path}: {e}")
+    if not isinstance(data, dict) or not all(
+            isinstance(lang, str) and isinstance(labels, dict)
+            and all(isinstance(k, str) and isinstance(v, str)
+                    for k, v in labels.items())
+            for lang, labels in data.items()):
+        sys.exit(f"Error: {path} must map languages to "
+                 '{"label key": "text"} objects')
+    return data
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(
         prog="gml_viewer.py",
@@ -428,6 +444,9 @@ def main(argv=None):
                    help="layer_names.json: raw layer name -> display name "
                         "in the viewer; key order sets the layer control "
                         "order")
+    p.add_argument("--i18n", metavar="JSON",
+                   help="viewer UI labels {lang: {key: text}} layered over "
+                        "the built-in EN/PL set (e.g. i18n.json)")
     p.add_argument("--overlay", action="store_true",
                    help="with --zones/--colors: paint groups as "
                         "semi-transparent overlays on top of the original "
@@ -541,6 +560,7 @@ def main(argv=None):
                        if args.zone_definition else None)
     layer_names = (load_layer_names(args.layer_names)
                    if args.layer_names else None)
+    i18n = load_i18n(args.i18n) if args.i18n else None
     streets = load_streets(args.streets) if args.streets else None
     descriptions = None
     if args.descriptions:
@@ -608,7 +628,7 @@ def main(argv=None):
         payload = make_web_payload()
         if payload is None:
             sys.exit("Error: --export-static requires --zones/--colors")
-        index = export_static(payload, args.export_static)
+        index = export_static(payload, args.export_static, i18n)
         if color_report:
             color_report()
         if args.output:
