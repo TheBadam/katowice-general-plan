@@ -115,6 +115,11 @@ _INTERACTIVE_HTML = r"""<!DOCTYPE html>
   .note { margin: 0 0 12px; font-size: 12px; color: #444; }
   .note summary { cursor: pointer; color: #0366d6; font-weight: 600; }
   .note div { margin-top: 6px; line-height: 1.5; white-space: normal; }
+  #changelogtext p { margin: 4px 0; }
+  #changelogtext ul { margin: 4px 0; padding-left: 18px; }
+  #changelogtext li { margin: 2px 0; }
+  #changelogtext .md-h { font-weight: 600; margin: 8px 0 2px; }
+  #changelogtext .md-h:first-child { margin-top: 0; }
   #info { position: fixed; background: #fff; border: 1px solid #999;
           border-radius: 4px; padding: 6px 9px; font-size: 12px;
           pointer-events: none; display: none; z-index: 10;
@@ -157,6 +162,10 @@ _INTERACTIVE_HTML = r"""<!DOCTYPE html>
     <details id="pnote" class="note" style="display:none">
       <summary id="notesum">Explanation</summary>
       <div id="notetext"></div>
+    </details>
+    <details id="pchangelog" class="note" style="display:none">
+      <summary id="changelogsum">Changelog</summary>
+      <div id="changelogtext"></div>
     </details>
     <div id="groups"></div>
     <div class="btns">
@@ -206,6 +215,26 @@ let HIGHLIGHT = {color: '#111', width: 3.5, dash: [16, 12]};
 function esc(s) {
   return String(s).replace(/[&<>"]/g, c =>
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+}
+// minimal markdown for the sidebar changelog: #-headings, lists, **bold**
+function mdLite(src) {
+  const out = [];
+  let list = false;
+  for (let line of String(src).split(/\r?\n/)) {
+    line = esc(line);
+    if (/^[-*] /.test(line)) {
+      if (!list) { out.push('<ul>'); list = true; }
+      out.push('<li>' + line.replace(/^[-*] /, '') + '</li>');
+    } else {
+      if (list) { out.push('</ul>'); list = false; }
+      if (/^#{1,6} /.test(line))
+        out.push('<div class="md-h">' + line.replace(/^#+ /, '') + '</div>');
+      else if (line.trim())
+        out.push('<p>' + line + '</p>');
+    }
+  }
+  if (list) out.push('</ul>');
+  return out.join('').replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
 }
 function darkenHex(h) {
   h = h.replace('#', '');
@@ -746,6 +775,14 @@ async function load() {
     document.getElementById('pnote').style.display = 'block';
     document.getElementById('notetext').textContent = DATA.note;
   }
+  // changelog: collapsed by default; deliberately not part of the
+  // shareable URL state (unlike toggles/zones/opacity)
+  document.getElementById('changelogsum').textContent = L.changelog;
+  if (DATA.changelog) {
+    document.getElementById('pchangelog').style.display = 'block';
+    document.getElementById('changelogtext').innerHTML =
+      mdLite(DATA.changelog);
+  }
   initGroups();
   loadState();  // restore a shared view from the URL hash, if any
   // build Path2D geometry in chunks, yielding between chunks: keeps the
@@ -1007,7 +1044,7 @@ def build_map_payload(features, schema, prop, zone_mapping,
                       title, srs=None, resolve_key=None, streets=None,
                       overlay=False, descriptions=None,
                       page_title=None, page_subtitle=None, note=None,
-                      links=None, src=None,
+                      links=None, src=None, changelog=None,
                       default_off=None, zone_definition=None, hatch=None,
                       highlight=None, default_alpha=None, layer_names=None,
                       street_tolerance=None):
@@ -1261,6 +1298,7 @@ def build_map_payload(features, schema, prop, zone_mapping,
     payload["src"] = src or title
     payload["note"] = note or ""
     payload["links"] = links or []
+    payload["changelog"] = changelog or ""
     if default_off:
         for g in payload["groups"]:
             g["on"] = g["name"] not in default_off
@@ -1284,6 +1322,7 @@ DEFAULT_I18N = {
         "reset": "Reset view",
         "png": "Download PNG",
         "explanation": "Explanation",
+        "changelog": "Changelog",
         "loadError": "Failed to load map data from ",
         "layer": "layer",
         "group": "group",
@@ -1304,6 +1343,7 @@ DEFAULT_I18N = {
         "reset": "Resetuj widok",
         "png": "Pobierz PNG",
         "explanation": "Wyjaśnienie",
+        "changelog": "Lista zmian",
         "loadError": "Nie udało się wczytać danych mapy z ",
         "layer": "warstwa",
         "group": "grupa",

@@ -499,6 +499,10 @@ def main(argv=None):
     p.add_argument("--page-note", metavar="FILE",
                    help="plain text file shown on the page in a collapsible "
                         "'Explanation' block (methodology, sources...)")
+    p.add_argument("--changelog", metavar="FILE",
+                   help="markdown file shown in the sidebar as a collapsible "
+                        "'Changelog' section (collapsed by default; not "
+                        "part of the shareable URL state)")
     p.add_argument("--page-link", action="append", default=[],
                    metavar="NAME=URL",
                    help="link shown at the top of the page (repeatable), "
@@ -659,6 +663,13 @@ def main(argv=None):
             note = Path(args.page_note).read_text(encoding="utf-8").strip()
         except OSError as e:
             sys.exit(f"Error: cannot read {args.page_note}: {e}")
+    changelog = None
+    if args.changelog:
+        try:
+            changelog = Path(args.changelog).read_text(
+                encoding="utf-8").strip()
+        except OSError as e:
+            sys.exit(f"Error: cannot read {args.changelog}: {e}")
     links = []
     for spec in args.page_link:
         if "=" not in spec:
@@ -698,7 +709,7 @@ def main(argv=None):
             highlight=(settings["highlight"] if settings else None),
             descriptions=descriptions,
             page_title=args.page_title, page_subtitle=args.page_subtitle,
-            note=note, links=links,
+            note=note, links=links, changelog=changelog,
             src=Path(args.input).name,
             default_off=args.default_off or None,
             default_alpha=default_alpha,

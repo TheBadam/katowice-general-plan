@@ -216,6 +216,7 @@ Try it on the bundled synthetic example:
 | `--descriptions JSON` | Group descriptions shown in the viewer panel |
 | `--page-title TEXT` | Page title (browser tab and panel header) |
 | `--page-note FILE` | Plain text shown in a collapsible "Explanation" block |
+| `--changelog FILE` | Markdown shown in the sidebar as a collapsible "Changelog" section (collapsed by default, not part of the shareable URL state) |
 | `--page-link NAME=URL` | Link shown at the top of the page (repeatable) |
 | `--streets GEOJSON` | Overlay named streets (see fetch_streets.py) |
 | `--i18n JSON` | Viewer UI labels `{lang: {key: text}}` layered over the built-in EN/PL set (e.g. `i18n.json`) |

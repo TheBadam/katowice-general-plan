@@ -22,6 +22,7 @@ cd "$(dirname "$0")"
     --page-title "Potencjalne zagrożenia stanu środowiska, mogące wystąpić w wyniku realizacji Planu Ogólnego." \
     --page-subtitle "Na bazie \"Prognozy oddziaływania na środowisko projektu Planu Ogólnego miasta Katowice\",dr Grzegorz Synowiec, Katowice 04.10.2026r" \
     --page-note page_note.txt \
+    --changelog CHANGELOG.md \
     --page-link "report=https://planogolnydlakatowic.pl/" \
     --page-link "registry=https://rejestr-urbanistyczny.gov.pl/published/details/pog/4521" \
     --export-static static_site "$@"
