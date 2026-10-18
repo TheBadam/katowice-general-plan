@@ -24,7 +24,7 @@ legend, prints attribute tables, and can export everything to GeoJSON.
 - **Input types**: single `.gml`/`.xml`, a `.zip` archive of plans, a `.gz`
   file, or a directory (all GML files merged).
 - **Outputs**: interactive matplotlib window (when a GUI is available), an
-  interactive **browser map** via `--web` (works headless), a PNG image, an
+  interactive **static web map** via `--export-static`, a PNG image, an
   attribute dump, and a GeoJSON export.
 
 ## Install
@@ -36,7 +36,8 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
-Dependencies: `lxml`, `shapely`, `matplotlib`.
+Dependencies: `lxml`, `shapely`, `matplotlib` (plus `pyproj` for
+`fetch_streets.py`).
 
 ## Usage
 
@@ -59,39 +60,17 @@ Dependencies: `lxml`, `shapely`, `matplotlib`.
 
 # Archive downloaded from a planning office (e.g. katowice plan ogólny)
 .venv/bin/python gml_viewer.py plan_ogolny.zip -o katowice.png
-
-# Interactive map in the browser (works on headless machines)
-.venv/bin/python gml_viewer.py plan.gml --web          # serves on port 8988
-.venv/bin/python gml_viewer.py plan.gml --web 8080      # custom port
 ```
-
-### Interactive viewing on a headless machine
-
-`--web` serves the map with the full matplotlib toolbar (pan, zoom, save) in
-your browser, using a prefix-safe server: all asset URLs are relative and the
-WebSocket address is computed by the browser, so it works both directly and
-behind reverse proxies that add a path prefix (VS Code code-server
-`/proxy/<port>/`, JupyterHub, nginx subpaths, SSH port forwarding).
-
-```bash
-.venv/bin/python gml_viewer.py plan.gml --web
-# direct:     open http://127.0.0.1:8988/
-# via VS Code code-server proxy:
-#             open https://<host>/proxy/8988/
-```
-
-The URL path does not matter - the server accepts any prefix (e.g.
-`https://host:8443/proxy/8988/`, `/gml/`, or a bare `/`), so you can open it
-through whatever route your proxy exposes for the port. Stop the server with
-Ctrl-C. Add `-o mapa.png` alongside `--web` to also save a static PNG.
 
 ### Static export (host anywhere)
 
 `--export-static DIR` writes the same interactive viewer as a fully static
 site: `index.html` (auto language) plus `en/index.html` and `pl/index.html`,
 and `mapdata.json` (~8 MB for the Katowice plan). No Python or server-side
-code is needed at serving time - any static file server works (nginx,
-Apache, GitHub Pages, Netlify, S3, or even a file:// URL). The
+code is needed at serving time: for development, Python's simple built-in
+server is enough; in production the site is plain static files handed out
+by any web server (nginx, Apache, GitHub Pages, Netlify, S3, or even a
+file:// URL) - no Python or Tornado involved. The
 matplotlib-specific link is dropped; everything else (layer toggles,
 opacity, hover details, street names, descriptions, PNG download) works
 identically. The panel is organized into sections ("GML layers",
@@ -108,14 +87,13 @@ other path - use the EN/PL switcher in the panel to move between them:
     --page-link "Environmental report=https://planogolnydlakatowic.pl/" \
     --export-static static_site
 
-python3 -m http.server -d static_site 8000
-# or upload the static_site/ folder to any static host
+python3 -m http.server -d static_site 8000    # development preview
+# production: upload the static_site/ folder to any web server
 ```
 
 The page fetches `mapdata.json` relative to its own URL (one directory up
-for the language folders), so it works at any path. The same language URLs
-work with the live `--web` server. Pre-generate a preview PNG with
-`-o map.png` in the same command.
+for the language folders), so it works at any path. Pre-generate a preview
+PNG with `-o map.png` in the same command.
 
 For the Katowice plan there is a launcher that exports the static site
 without starting any server:
@@ -124,12 +102,13 @@ without starting any server:
 ./export_katowice.sh            # -> static_site/ (add -o map.png for a preview)
 ```
 
-`run_katowice.sh` is the interactive-server counterpart.
+`run_katowice.sh` rebuilds the static site (via `export_katowice.sh`) and
+previews it locally with `python3 -m http.server`.
 
 ### Interactive group viewer
 
-When `--web` is combined with `--zones`/`--colors`, the browser page is a
-custom canvas viewer with per-group controls:
+When `--export-static` is combined with `--zones`/`--colors`, the exported
+page is a custom canvas viewer with per-group controls:
 
 - checkbox per layer/group to toggle it on/off,
 - opacity slider per layer/group,
@@ -138,12 +117,11 @@ custom canvas viewer with per-group controls:
 - hover a shape to see its details (oznaczenie, layer, group, symbol, group
   description); click to pin the details, click again or Esc to unpin,
 - drag to pan, mouse wheel to zoom,
-- Download PNG button (renders the current view),
-- the classic matplotlib WebAgg view stays available under `.../classic/`.
+- Download PNG button (renders the current view).
 
 ```bash
 .venv/bin/python gml_viewer.py plan.gml --zones zones.json \
-    --colors group_definitions.json --web
+    --colors group_definitions.json --export-static site
 ```
 
 ### Street names overlay
@@ -165,21 +143,13 @@ street is long enough at the current zoom).
 
 ```bash
 .venv/bin/python gml_viewer.py plan.gml --zones zones.json \
-    --colors group_definitions.json --streets streets.geojson --web
+    --colors group_definitions.json --streets streets.geojson --export-static site
 ```
 
 The streets file is plain GeoJSON (LineString/MultiLineString with a `name`
 property), so any other source works too - it just has to be in the same
 CRS as the plan. Options: `--highways` (regex of OSM highway types),
 `--buffer` (meters around plan bounds), `--overpass` (custom API URL).
-
-For remote machines without such a proxy, forward the port over SSH instead:
-
-```bash
-ssh -L 8988:127.0.0.1:8988 user@server
-.venv/bin/python gml_viewer.py plan.gml --web    # on the server
-# open http://127.0.0.1:8988/ in your local browser
-```
 
 Try it on the bundled synthetic example:
 
@@ -213,7 +183,6 @@ Try it on the bundled synthetic example:
 | `--title TEXT` | Custom map title |
 | `--dpi N` | PNG resolution (default 200) |
 | `--no-show` | Do not open an interactive window |
-| `--web [PORT]` | Serve the map in a browser with pan/zoom (default port 8988) |
 | `--export-static DIR` | Export the interactive viewer as a static site (host anywhere) |
 
 ## Programmatic use
@@ -283,7 +252,7 @@ fadeable base layer, with the A-D group overlays on top:
 
 ```bash
 .venv/bin/python gml_viewer.py plan.gml --zones zones.json \
-    --colors group_definitions.json --overlay --web
+    --colors group_definitions.json --overlay
 ```
 
 **Group descriptions.** `--descriptions zones_description.json` adds a

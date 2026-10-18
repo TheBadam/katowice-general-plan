@@ -11,7 +11,7 @@ Usage examples:
     python gml_viewer.py plan.zip --list-layers
     python gml_viewer.py plan.gml --layer funkcje --label funkcjaSymbol
     python gml_viewer.py plan.gml --attributes --geojson plan.geojson
-    python gml_viewer.py plan.gml --web               # browser view (headless OK)
+    python gml_viewer.py plan.gml --export-static site  # static web page
 """
 
 from __future__ import annotations
@@ -449,21 +449,12 @@ def main(argv=None):
     p.add_argument("--dpi", type=int, default=200, help="output PNG DPI (default 200)")
     p.add_argument("--no-show", action="store_true",
                    help="do not open an interactive window")
-    p.add_argument("--web", nargs="?", const=8988, metavar="PORT", type=int,
-                   help="serve the map in a web browser (interactive pan/zoom); "
-                        "headless-safe. Optional PORT (default 8988).")
     p.add_argument("--export-static", metavar="DIR",
                    help="export the interactive viewer as a static web page "
                         "(index.html + mapdata.json) to DIR; hostable on "
                         "any static file server, no Python needed")
     args = p.parse_args(argv)
 
-    if args.web is not None:
-        import matplotlib
-        matplotlib.use("webagg")
-        import matplotlib.pyplot as plt
-
-    # Imported after the backend is chosen so WebAgg can take over pyplot.
     from gml_map import parse_input, group_layers, render
     from gml_map.render import can_show_interactively
     from shapely.geometry import mapping
@@ -495,7 +486,7 @@ def main(argv=None):
 
     interactive = can_show_interactively() and not args.no_show
     out = args.output
-    if out is None and not interactive and args.web is None:
+    if out is None and not interactive:
         stem = Path(args.input).stem or "gml"
         out = f"{stem}_map.png"
 
@@ -634,24 +625,6 @@ def main(argv=None):
               f"({len(payload['features'])} features, {size / 1e6:.1f} MB)")
         print("Host it with any static server, e.g.:")
         print(f"  python3 -m http.server -d {args.export_static} 8000")
-        return 0
-
-    if args.web is not None:
-        from gml_map.webapp import serve
-        payload = make_web_payload()
-        fig = render(layers, title=title, subtitle=subtitle,
-                     label_prop=args.label, out=out, dpi=args.dpi,
-                     show=False, keep_open=True,
-                     color_fn=color_fn, legend_entries=legend_entries,
-                     streets=streets, overlay_fn=overlay_fn,
-                     zone_definition=zone_definition)
-        if color_report:
-            color_report()
-        print()
-        serve(fig, port=args.web, title=title, data=payload)
-        plt.close(fig)
-        if out:
-            print(f"\nMap saved -> {out}")
         return 0
 
     render(layers, title=title, subtitle=subtitle,

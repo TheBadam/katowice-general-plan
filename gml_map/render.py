@@ -102,7 +102,7 @@ def _draw_streets(ax, streets, map_width):
 
 
 def render(layers: dict[str, list[Feature]], *, title="", subtitle="",
-           label_prop=None, out=None, dpi=200, show=True, keep_open=False,
+           label_prop=None, out=None, dpi=200, show=True,
            color_fn=None, legend_entries=None, streets=None, overlay_fn=None,
            zone_definition=None):
     """Draw all layers; optionally save to `out` and/or show a window.
@@ -289,9 +289,9 @@ def render(layers: dict[str, list[Feature]], *, title="", subtitle="",
         written = out
     if show:
         plt.show()
-    elif not keep_open:
+    else:
         plt.close(fig)
-    return fig if keep_open else written
+    return written
 
 
 def can_show_interactively() -> bool:

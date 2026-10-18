@@ -1,5 +1,4 @@
 lxml>=4.9
 matplotlib>=3.5
 shapely>=2.0
-tornado>=6.0
 pyproj>=3.0
