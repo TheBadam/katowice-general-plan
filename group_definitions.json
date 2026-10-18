@@ -1,8 +1,0 @@
-{
-  "global_hatch": {"width": 5, "spacing": 20, "alpha": 0.7},
-  "A": "#78fb2b",
-  "B": "#e5e5e5",
-  "C": "#ffcf4d",
-  "D": "#ff6f6f",
-  "_default": "#7e7e7e"
-}

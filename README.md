@@ -81,7 +81,7 @@ the EN/PL switcher in the panel to move between them:
 
 ```bash
 .venv/bin/python gml_viewer.py plan.gml --zones zones.json \
-    --colors group_definitions.json --overlay --streets streets.geojson \
+    --settings settings.json --overlay --streets streets.geojson \
     --descriptions zones_description.json \
     --page-title "Environmental impact on Katowice plan" \
     --page-note page_note.txt \
@@ -143,21 +143,25 @@ previews it locally with `python3 -m http.server`.
 
 ### Interactive group viewer
 
-When `--export-static` is combined with `--zones`/`--colors`, the exported
+When `--export-static` is combined with `--zones`/`--colors`/`--settings`, the exported
 page is a custom canvas viewer with per-group controls:
 
 - checkbox per layer/group to toggle it on/off,
 - opacity slider per layer/group,
 - drag the divider between the map and the panel to resize the panel
   (width is remembered),
-- hover a shape to see its details (oznaczenie, layer, group, symbol, group
-  description); click to pin the details, click again or Esc to unpin,
+- hover a shape to see its details (oznaczenie with the zone-type title,
+  layer, group, symbol, group description); the dashed zone outline
+  reacts instantly, the details tooltip appears after the pointer rests
+  for 200 ms and can be disabled with the "On-hover details" switch
+  under the "GML layers" section header (the outline keeps working);
+  click to pin the details, click again or Esc to unpin,
 - drag to pan, mouse wheel to zoom,
 - Download PNG button (renders the current view).
 
 ```bash
 .venv/bin/python gml_viewer.py plan.gml --zones zones.json \
-    --colors group_definitions.json --export-static site
+    --settings settings.json --export-static site
 ```
 
 ### Street names overlay
@@ -179,7 +183,7 @@ street is long enough at the current zoom).
 
 ```bash
 .venv/bin/python gml_viewer.py plan.gml --zones zones.json \
-    --colors group_definitions.json --streets streets.geojson --export-static site
+    --settings settings.json --streets streets.geojson --export-static site
 ```
 
 The streets file is plain GeoJSON (LineString/MultiLineString with a `name`
@@ -202,10 +206,11 @@ Try it on the bundled synthetic example:
 | `--layer NAME` | Render only matching layers (repeatable, substring match) |
 | `--attributes` | Print feature attribute tables (first 15 per layer) |
 | `--label PROP` | Annotate polygons with a property value (e.g. zone symbol) |
-| `--colors JSON` | Color schema file; see below |
+| `--colors JSON` | Color schema file (or the `"group"` section of `settings.json`); see below |
+| `--settings JSON` | Combined configuration (`settings.json`): `"group"` (color schema + optional `global_hatch`), `"zone"` (zone-type definitions), `"highlight"` (hovered-zone outline: `color`, `width`, `dash` px) |
 | `--zones JSON` | Group definitions (`zones.json`); see below |
 | `--color-prop PROP` | Property matched against the color schema (default: `oznaczenie`) |
-| `--zone-definition JSON` | Paint zone-type features by symbol: fill `color` + `stroke` borders from `zone_definition.json` |
+| `--zone-definition JSON` | Paint zone-type features by symbol: fill `color` + `stroke` borders (or the `"zone"` section of `settings.json`) |
 | `--overlay` | Paint groups as overlays on the original GML rendering |
 | `--default-off GROUP` | Layer/group unchecked by default in the viewer (repeatable) |
 | `--descriptions JSON` | Group descriptions shown in the viewer panel |
@@ -244,26 +249,37 @@ Combine a group definition file with a group color schema:
 
 ```bash
 .venv/bin/python gml_viewer.py katowice_plan_ogolny_26.gml \
-    --zones zones.json --colors group_definitions.json
+    --zones zones.json --settings settings.json
 ```
 
 - `zones.json` holds groups (A, B, C, D), each a list of objects with a
   `name` and `zones`: an array of individual oznaczenia
   (`["1SU", "2SU", "254SU"]`, numerically sorted). A comma-separated
   string is also accepted for backward compatibility.
-- `group_definitions.json` holds the group colors, the `_default` color
-  for ungrouped oznaczenia, and the optional `global_hatch` configuration
-  of the overlay hatch (line width and spacing in px; `alpha` is the
-  opacity of the solid color between the hatch lines):
+- the `"group"` section of `settings.json` holds the group colors, the
+  `_default` color for ungrouped oznaczenia, and the optional
+  `global_hatch` configuration of the overlay hatch (line width and
+  spacing in px; `alpha` is the opacity of the solid color between the
+  hatch lines). The `"zone"` section holds zone-type definitions
+  (`{symbol: {"title", "color", "stroke", "alpha"}}`) painting
+  zone-type features by symbol, and `"highlight"` the hovered-zone
+  outline style (`{"color": ..., "width": px, "dash": [on, off, ...] px}`):
 
 ```json
 {
-  "global_hatch": {"width": 5, "spacing": 20, "alpha": 0.7},
-  "A": "#4daf4a",
-  "B": "#ff7f00",
-  "C": "#377eb8",
-  "D": "#984ea3",
-  "_default": "#dddddd"
+  "group": {
+    "global_hatch": {"width": 5, "spacing": 20, "alpha": 0.7},
+    "A": "#4daf4a",
+    "B": "#ff7f00",
+    "C": "#377eb8",
+    "D": "#984ea3",
+    "_default": "#dddddd"
+  },
+  "zone": {
+    "SN": {"title": "Strefa zieleni i rekreacji", "color": "#4daf4a",
+            "stroke": "#191919", "alpha": 1.0}
+  },
+  "highlight": {"color": "#111111", "width": 3.5, "dash": [16, 12]}
 }
 ```
 
@@ -289,7 +305,7 @@ fadeable base layer, with the A-D group overlays on top:
 
 ```bash
 .venv/bin/python gml_viewer.py plan.gml --zones zones.json \
-    --colors group_definitions.json --overlay
+    --settings settings.json --overlay
 ```
 
 **Group descriptions.** `--descriptions zones_description.json` adds a

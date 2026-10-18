@@ -9,9 +9,8 @@ cd "$(dirname "$0")"
 
 .venv/bin/python gml_viewer.py katowice_plan_ogolny_26.gml \
     --zones zones.json \
-    --colors group_definitions.json \
+    --settings settings.json \
     --overlay \
-    --zone-definition zone_definition.json \
     --default-off AktPlanowaniaPrzestrzennego \
     --default-off ObszarZabudowySrodmiejskiej \
     --default-alpha StrefaPlanistyczna=0.75 \

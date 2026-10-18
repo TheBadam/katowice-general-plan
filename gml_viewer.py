@@ -161,22 +161,27 @@ def write_geojson(layers, path):
 
 
 def load_color_schema(path):
-    """Load a JSON group-definitions file (e.g. group_definitions.json).
+    """Load a JSON group-definitions file (e.g. the "group" section of
+    settings.json).
 
     Maps group -> color, plus the optional "_default" color for unmatched
     values and the optional "global_hatch" app-level hatch configuration
     of overlay groups: {"width": px, "spacing": px, "alpha": 0..1}, where
     alpha is the opacity of the fill between the hatch lines.
     """
-    import json
-    from matplotlib.colors import to_rgb
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
-    except json.JSONDecodeError as e:
-        sys.exit(f"Error: {path} is not valid JSON: {e}")
+    except (json.JSONDecodeError, OSError) as e:
+        sys.exit(f"Error: cannot load {path}: {e}")
     if not isinstance(data, dict) or not data:
         sys.exit(f"Error: {path} must contain a JSON object "
                  '{"value": "color", ...}')
+    return validate_color_schema(data, path)
+
+
+def validate_color_schema(data, path):
+    """Validate an already-parsed color schema (see load_color_schema)."""
+    from matplotlib.colors import to_rgb
     hatch = data.get("global_hatch")
     if hatch is not None:
         if not isinstance(hatch, dict):
@@ -316,7 +321,8 @@ def load_streets(path):
 
 
 def load_zone_definition(path):
-    """Load zone_definition.json: {symbol: {"title", "color", "stroke"}}.
+    """Load zone-type definitions (e.g. the "zone" section of settings.json):
+    {symbol: {"title", "color", "stroke"}}.
 
     The optional "alpha" (0..1) is a zone's initial fill transparency;
     the viewer's opacity slider scales this level.
@@ -329,6 +335,13 @@ def load_zone_definition(path):
     if not isinstance(data, dict):
         sys.exit(f"Error: {path} must map symbols to "
                  '{"title": ..., "color": ..., "stroke": ...}')
+    return validate_zone_definition(data, path)
+
+
+def validate_zone_definition(data, path):
+    """Validate already-parsed zone-type definitions (see
+    load_zone_definition)."""
+    from matplotlib.colors import to_rgb
     for sym, z in data.items():
         if not isinstance(z, dict) or "title" not in z or "color" not in z:
             sys.exit(f"Error: {path}: entry {sym!r} needs title and color")
@@ -342,6 +355,60 @@ def load_zone_definition(path):
             sys.exit(f"Error: {path}: entry {sym!r} alpha must be "
                      "a number in [0, 1]")
     return data
+
+
+def load_settings(path):
+    """Load settings.json: the combined viewer configuration.
+
+    {"group": <color schema + optional "global_hatch">,
+     "zone": {symbol: {"title", "color", "stroke", "alpha"}},
+     "highlight": {"color": ..., "width": px, "dash": [on, off, ...] in px}}
+    """
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        sys.exit(f"Error: cannot load {path}: {e}")
+    if not isinstance(data, dict):
+        sys.exit(f"Error: {path} must be a JSON object with optional "
+                 '"group", "zone" and "highlight" sections')
+    if not any(k in data for k in ("group", "zone", "highlight")):
+        sys.exit(f"Error: {path}: expected a \"group\", \"zone\" and/or "
+                 '"highlight" section')
+    out = {}
+    group = data.get("group") or {}
+    if not isinstance(group, dict):
+        sys.exit(f"Error: {path}: group must be an object")
+    out["schema"] = validate_color_schema(group, path) if group else None
+    zone = data.get("zone") or {}
+    if not isinstance(zone, dict):
+        sys.exit(f"Error: {path}: zone must be an object")
+    out["zone"] = validate_zone_definition(zone, path) if zone else None
+    highlight = data.get("highlight") or {}
+    if not isinstance(highlight, dict):
+        sys.exit(f"Error: {path}: highlight must be an object")
+    if highlight:
+        width = highlight.get("width", 3.5)
+        if not isinstance(width, (int, float)) or not width > 0:
+            sys.exit(f"Error: {path}: highlight width must be a "
+                     "positive number")
+        dash = highlight.get("dash", [16, 12])
+        if (not isinstance(dash, list) or len(dash) < 2
+                or not all(isinstance(v, (int, float)) and v > 0
+                           for v in dash)):
+            sys.exit(f"Error: {path}: highlight dash must be a list of "
+                     "two or more positive numbers (px, on/off pattern)")
+        color = highlight.get("color", "#111111")
+        try:
+            from matplotlib.colors import to_rgb
+            to_rgb(color)
+        except (ValueError, TypeError):
+            sys.exit(f"Error: {path}: highlight color must be a valid "
+                     f"color: {color!r}")
+        out["highlight"] = {"color": color, "width": float(width),
+                            "dash": [float(v) for v in dash]}
+    else:
+        out["highlight"] = None
+    return out
 
 
 def load_layer_names(path):
@@ -403,6 +470,15 @@ def main(argv=None):
                         "without --zones), plus optional '_default' and "
                         "'global_hatch' (overlay hatch config: width, "
                         "spacing, alpha)")
+    p.add_argument("--settings", metavar="JSON",
+                   help="settings.json: combined configuration with a "
+                        '"group" section (color schema + optional '
+                        "'global_hatch'), a \"zone\" section "
+                        "({symbol: {title, color, stroke, alpha}}) and a "
+                        '\'highlight" section ({"width": px, "dash": '
+                        "[on, off, ...] px} for the hovered-zone "
+                        "outline); replaces --colors and "
+                        "--zone-definition together")
     p.add_argument("--zones", metavar="JSON",
                    help="JSON group definitions: {group: [{'name': ..., "
                         "'zones': '1SU, 2SU, ...'}]}; groups are colored "
@@ -520,7 +596,9 @@ def main(argv=None):
     overlay_fn = None
     legend_entries = None
     color_report = None
-    if args.zones or args.colors:
+    settings = load_settings(args.settings) if args.settings else None
+    settings_schema = settings["schema"] if settings else None
+    if args.zones or args.colors or settings_schema:
         zone_mapping = None
         if args.zones:
             known = {v.strip() for f in features
@@ -536,15 +614,17 @@ def main(argv=None):
                 for ozn, gs in conflicts.items():
                     print(f"Warning: '{ozn}' appears in multiple groups "
                           f"({', '.join(gs)}); last one wins")
-            if args.colors:
-                schema = load_color_schema(args.colors)
-            else:  # auto palette when no schema file given
-                import matplotlib
-                cmap = matplotlib.colormaps["tab10"]
-                schema = {g: matplotlib.colors.to_hex(cmap(i % 10))
-                          for i, g in enumerate(groups)}
-        else:
+        if args.colors:
             schema = load_color_schema(args.colors)
+        elif settings_schema:
+            schema = settings_schema
+        elif args.zones:  # auto palette when no schema file given
+            import matplotlib
+            cmap = matplotlib.colormaps["tab10"]
+            schema = {g: matplotlib.colors.to_hex(cmap(i % 10))
+                      for i, g in enumerate(groups)}
+        else:
+            schema = None
         paint_fn, color_report = make_color_fn(schema, args.color_prop,
                                                zone_mapping,
                                                overlay=args.overlay)
@@ -553,11 +633,12 @@ def main(argv=None):
         else:
             color_fn = paint_fn
         legend_entries = [(k if k != "_default" else "other", v)
-                          for k, v in schema.items()
+                          for k, v in (schema or {}).items()
                           if k != "global_hatch"]
 
     zone_definition = (load_zone_definition(args.zone_definition)
-                       if args.zone_definition else None)
+                       if args.zone_definition
+                       else (settings["zone"] if settings else None))
     layer_names = (load_layer_names(args.layer_names)
                    if args.layer_names else None)
     i18n = load_i18n(args.i18n) if args.i18n else None
@@ -614,6 +695,7 @@ def main(argv=None):
             title=title, srs=srs, resolve_key=resolve_key,
             streets=streets, overlay=args.overlay,
             zone_definition=zone_definition,
+            highlight=(settings["highlight"] if settings else None),
             descriptions=descriptions,
             page_title=args.page_title, page_subtitle=args.page_subtitle,
             note=note, links=links,
@@ -627,7 +709,8 @@ def main(argv=None):
         from gml_map.webapp import export_static
         payload = make_web_payload()
         if payload is None:
-            sys.exit("Error: --export-static requires --zones/--colors")
+            sys.exit("Error: --export-static requires "
+                     "--zones/--colors/--settings")
         index = export_static(payload, args.export_static, i18n)
         if color_report:
             color_report()

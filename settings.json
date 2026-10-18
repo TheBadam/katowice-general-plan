@@ -1,0 +1,26 @@
+{
+  "group": {
+    "global_hatch": {"width": 5, "spacing": 20, "alpha": 0.5},
+    "A": "#78fb2b",
+    "B": "#e5e5e5",
+    "C": "#ff7d4d",
+    "D": "#ff6f6f",
+    "_default": "#7e7e7e"
+  },
+  "zone": {
+    "SN": {"title": "Strefa zieleni i rekreacji", "color": "#4daf4a", "stroke": "#191919", "alpha": 1.0},
+    "SO": {"title": "Strefa otwarta", "color": "#a6d854", "stroke": "#191919", "alpha": 1.0},
+    "SC": {"title": "Strefa cmentarna", "color": "#999999", "stroke": "#191919", "alpha": 1.0},
+    "SJ": {"title": "Strefa wielofunkcyjna, z zabudową mieszkaniową jednorodzinną", "color": "#80b1d3", "stroke": "#191919", "alpha": 1.0},
+    "SU": {"title": "Strefa usługowa", "color": "#fdb462", "stroke": "#191919", "alpha": 1.0},
+    "SW": {"title": "Strefa wielofunkcyjna z zabudową mieszkaniową wielorodzinną", "color": "#377eb8", "stroke": "#191919", "alpha": 1.0},
+    "SR": {"title": "Strefa produkcji rolniczej", "color": "#ccebc5", "stroke": "#191919", "alpha": 1.0},
+    "SZ": {"title": "Strefa wielofunkcyjna z zabudową zagrodową", "color": "#d9b26a", "stroke": "#191919", "alpha": 1.0},
+    "SG": {"title": "Strefa górnictwa", "color": "#e41a1c", "stroke": "#191919", "alpha": 1.0},
+    "SH": {"title": "Strefa handlu wielkopowierzchniowego", "color": "#ff7f00", "stroke": "#191919", "alpha": 1.0},
+    "SI": {"title": "Strefa infrastrukturalna", "color": "#525252", "stroke": "#191919", "alpha": 1.0},
+    "SK": {"title": "Strefa komunikacyjna", "color": "#984ea3", "stroke": "#191919", "alpha": 1.0},
+    "SP": {"title": "Strefa gospodarcza", "color": "#8c564b", "stroke": "#191919", "alpha": 1.0}
+  },
+  "highlight": {"color": "#1e1e1e", "width": 3.5, "dash": [16, 12]}
+}

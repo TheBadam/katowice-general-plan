@@ -107,6 +107,9 @@ _INTERACTIVE_HTML = r"""<!DOCTYPE html>
              letter-spacing: 0.04em; color: #555;
              border-bottom: 1px solid #ddd; padding-bottom: 3px; }
   .sechead input { margin: 0 5px 0 0; vertical-align: middle; }
+  .hoveropt { display: flex; align-items: center; gap: 6px;
+              font-size: 11.5px; color: #444; margin: 2px 0 6px;
+              cursor: pointer; user-select: none; }
   .plinks { margin: 0 0 8px; font-size: 12px; }
   #plinks a { color: #0366d6; display: inline-block; margin: 0 10px 4px 0; }
   .note { margin: 0 0 12px; font-size: 12px; color: #444; }
@@ -183,6 +186,12 @@ const ctx = canvas.getContext('2d');
 const info = document.getElementById('info');
 let DATA = null, paths = [], streets = [], groups = {};
 let streetsPath = null;  // all streets merged into one Path2D
+const zoneTitles = {};   // zone symbol -> full title (e.g. SI -> Strefa ...)
+let hoverPf = null;       // feature under the cursor (or pinned): outlined
+let tooltipOn = true;      // on-hover details tooltip on/off (sidebar switch)
+try {  // remembered across visits, like the panel width
+  if (localStorage.getItem('hoverDetails') === '0') tooltipOn = false;
+} catch (err) {}
 const state = {};   // group name -> {on, alpha}
 const view = {s: 1, tx: 0, ty: 0};
 let dpr = 1;
@@ -190,6 +199,9 @@ let dpr = 1;
 // no UI. width/spacing in CSS px; fill = opacity of the solid color
 // between the hatch lines (0 = transparent).
 let HATCH = {width: 2.5, spacing: 16, fill: 0};
+// hovered-zone outline style: app-level only (from mapdata), no UI.
+// color, width/dash segments in CSS px; dash is an on/off pattern.
+let HIGHLIGHT = {color: '#111', width: 3.5, dash: [16, 12]};
 
 function esc(s) {
   return String(s).replace(/[&<>"]/g, c =>
@@ -283,7 +295,10 @@ function initGroups() {
     const s = {on: g.on !== false, alpha: g.alpha || 0.62};
     if (g.zones) {  // per-zone-type on/off via the panel zone rows;
       s.zones = {};  // they start consistent with the layer's state
-      for (const z of g.zones) s.zones[z.sym] = g.on !== false;
+      for (const z of g.zones) {
+        s.zones[z.sym] = g.on !== false;
+        if (z.title) zoneTitles[z.sym] = z.title;
+      }
     }
     state[g.name] = s;
   }
@@ -423,6 +438,16 @@ function draw() {
     ctx.lineWidth = 1.2 / view.s;
     ctx.stroke(pf.p);
   }
+  // hovered (or pinned) zone: dashed outline on top of all zone rendering
+  if (hoverPf && visible(hoverPf.b)) {
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = HIGHLIGHT.color;
+    ctx.lineWidth = HIGHLIGHT.width / view.s;
+    // screen-space dash (configured on/off px) regardless of zoom
+    ctx.setLineDash(HIGHLIGHT.dash.map(v => v / view.s));
+    ctx.stroke(hoverPf.p);
+    ctx.setLineDash([]);
+  }
   const stS = state['streets'];
   if (stS && stS.on && streetsPath) {
     ctx.globalAlpha = stS.alpha;
@@ -462,7 +487,7 @@ function zoomAt(mx, my, factor) {
   view.s *= factor;
   draw();
 }
-function identify(mx, my) {
+function hitTest(mx, my) {
   const wx = (mx - view.tx) / view.s;
   const wy = (view.ty - my) / view.s;
   ctx.setTransform(view.s * dpr, 0, 0, -view.s * dpr, view.tx * dpr, view.ty * dpr);
@@ -472,27 +497,49 @@ function identify(mx, my) {
     if (!st || !st.on || pf.t !== 'p') continue;
     if (st.zones && pf.sym && st.zones[pf.sym] === false) continue;
     if (wx < pf.b[0] || wy < pf.b[1] || wx > pf.b[2] || wy > pf.b[3]) continue;
-    if (ctx.isPointInPath(pf.p, wx, wy)) {
-      const g = pf.g ? groups[pf.g] : null;
-      let html = '<b>' + esc(pf.ozn || pf.layer) + '</b>' +
-        '<br>' + L.layer + ': ' + esc(pf.layer);
-      if (pf.g) html += '<br>' + L.group + ': ' + esc(pf.g);
-      if (pf.sym) html += '<br>' + L.symbol + ': ' + esc(pf.sym);
-      if (g) {
-        const t = g.desc_title || g.desc;
-        if (t) {
-          const short = t.length > 140 ? t.slice(0, 140) + '...' : t;
-          html += '<span class="desc">' + esc(short) + '</span>';
-        }
-      }
-      info.innerHTML = html;
-      info.style.display = 'block';
-      info.style.left = Math.max(0, Math.min(mx + 14, window.innerWidth - 290)) + 'px';
-      info.style.top = (my + 14) + 'px';
-      return true;
+    // isPointInPath tests the point AS GIVEN (canvas pixel space,
+    // unaffected by the CTM) against the CTM-transformed path, so pass
+    // the mouse position in device pixels, not world coordinates
+    if (ctx.isPointInPath(pf.p, mx * dpr, my * dpr)) return pf;
+  }
+  return null;
+}
+function tooltipHtml(pf) {
+  const g = pf.g ? groups[pf.g] : null;
+  const zt = pf.sym ? zoneTitles[pf.sym] : null;
+  let html = '<b>' + esc(pf.ozn || pf.layer) + '</b>';
+  if (zt) html += '<br>' + esc(zt);
+  html += '<br>' + L.layer + ': ' + esc(pf.layer);
+  if (pf.g) html += '<br>' + L.group + ': ' + esc(pf.g);
+  if (pf.sym && !zt) html += '<br>' + L.symbol + ': ' + esc(pf.sym);
+  if (g) {
+    const t = g.desc_title || g.desc;
+    if (t) {
+      const short = t.length > 140 ? t.slice(0, 140) + '...' : t;
+      html += '<span class="desc">' + esc(short) + '</span>';
     }
   }
+  return html;
+}
+function showTooltip(pf, mx, my) {
+  info.innerHTML = tooltipHtml(pf);
+  info.style.display = 'block';
+  info.style.left = Math.max(0, Math.min(mx + 14, window.innerWidth - 290)) + 'px';
+  info.style.top = (my + 14) + 'px';
+}
+// click/tap-to-pin: highlight and tooltip at once, no hover delay
+function identify(mx, my) {
+  const pf = hitTest(mx, my);
+  if (pf) {
+    showTooltip(pf, mx, my);
+    if (hoverPf !== pf) {
+      hoverPf = pf;
+      draw();
+    }
+    return true;
+  }
   info.style.display = 'none';
+  if (hoverPf) { hoverPf = null; draw(); }
   return false;
 }
 function swatchBackground(g) {
@@ -552,7 +599,13 @@ function buildPanel() {
     if (sec[2] === 'group') {  // master switch for all impact groups
       html += '<input type="checkbox" data-secmaster="group">';
     }
-    html += esc(sec[0]) + '</h4><div class="secbody" data-sec="' + sec[2] + '">';
+    html += esc(sec[0]) + '</h4>';
+    if (sec[2] === 'layer') {  // hover-details switch under the layers head
+      html += '<label class="hoveropt"><input type="checkbox"' +
+        (tooltipOn ? ' checked' : '') + ' data-hoveropt> ' +
+        esc(L.hoverDetails) + '</label>';
+    }
+    html += '<div class="secbody" data-sec="' + sec[2] + '">';
     for (const g of sec[1]) html += groupBlock(g, counts);
     html += '</div>';
   }
@@ -636,6 +689,17 @@ function buildPanel() {
       saveState();
     });
   });
+  // on-hover details switch (under the "GML layers" section header):
+  // it gates only the tooltip - the zone outline keeps working
+  const hopt = document.querySelector('[data-hoveropt]');
+  if (hopt) hopt.addEventListener('change', () => {
+    tooltipOn = hopt.checked;
+    try { localStorage.setItem('hoverDetails', tooltipOn ? '1' : '0'); } catch (err) {}
+    if (!tooltipOn) {  // hide the live tooltip; a pinned one stays until unpinned
+      clearTimeout(tooltipTimer);
+      if (!pinned) info.style.display = 'none';
+    }
+  });
 }
 async function load() {
   let res;
@@ -650,6 +714,7 @@ async function load() {
     return;
   }
   if (DATA.hatch) HATCH = Object.assign(HATCH, DATA.hatch);
+  if (DATA.highlight) HIGHLIGHT = Object.assign(HIGHLIGHT, DATA.highlight);
   document.title = DATA.page_title || DATA.title;
   document.getElementById('ptitle').textContent = DATA.page_title || DATA.title;
   const pst = DATA.page_subtitle || '';
@@ -718,8 +783,31 @@ async function load() {
 
 // --- pointer input: mouse drag/hover/click plus touch pan, pinch zoom
 // and tap-to-pin. Pointer events fire for mouse and touch alike.
-let drag = null, pinned = false, hoverRaf = null;
+let drag = null, pinned = false;
 let lastHover = {x: 0, y: 0};
+// hover: the zone outline reacts instantly (RAF-throttled); the details
+// tooltip is delayed: it shows only once the pointer rests for
+// TOOLTIP_DELAY ms, so quick pass-overs and panning do not trigger it
+const TOOLTIP_DELAY = 200;
+let hoverRaf = null;         // pending highlight update (requestAnimationFrame)
+let tooltipTimer = null;     // pending tooltip timeout
+function hoverUpdate() {
+  const pf = hitTest(lastHover.x, lastHover.y);
+  if (hoverPf !== pf) {  // instant outline, no delay
+    hoverPf = pf;
+    if (!pinned) info.style.display = 'none';  // stale tooltip outlives its zone
+    draw();
+  }
+  scheduleTooltip();
+}
+function scheduleTooltip() {
+  clearTimeout(tooltipTimer);
+  tooltipTimer = setTimeout(() => {
+    tooltipTimer = null;
+    if (tooltipOn && !pinned && hoverPf)
+      showTooltip(hoverPf, lastHover.x, lastHover.y);
+  }, TOOLTIP_DELAY);
+}
 const activePtrs = new Map();  // canvas pointerId -> {x, y}
 let pinch = null;              // two-finger distance at the previous step
 function canvasPos(e) {
@@ -730,6 +818,8 @@ canvas.addEventListener('pointerdown', e => {
   activePtrs.set(e.pointerId, {x: e.clientX, y: e.clientY});
   try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
   if (activePtrs.size === 1) {
+    clearTimeout(tooltipTimer);  // a drag/click cancels the pending tooltip
+    if (hoverRaf) { cancelAnimationFrame(hoverRaf); hoverRaf = null; }
     drag = {x: e.clientX, y: e.clientY, moved: false};
     canvas.classList.add('dragging');
   } else {  // second finger: pinch zoom instead of pan
@@ -764,12 +854,12 @@ canvas.addEventListener('pointermove', e => {
     }
     return;
   }
-  if (e.pointerType === 'mouse' && !pinned) {  // hover tooltip (mouse)
+  if (e.pointerType === 'mouse' && !pinned) {  // hover: outline + tooltip
     lastHover = canvasPos(e);
-    if (!hoverRaf) {
+    if (!hoverRaf) {  // instant highlight, throttled to one per frame
       hoverRaf = requestAnimationFrame(() => {
         hoverRaf = null;
-        identify(lastHover.x, lastHover.y);
+        hoverUpdate();
       });
     }
   }
@@ -787,6 +877,7 @@ canvas.addEventListener('pointerup', e => {
       if (pinned) {
         pinned = false;
         info.style.display = 'none';
+        if (hoverPf) { hoverPf = null; draw(); }
       } else {
         pinned = identify(cp.x, cp.y);
       }
@@ -800,7 +891,12 @@ canvas.addEventListener('pointercancel', e => {
   canvas.classList.remove('dragging');
 });
 canvas.addEventListener('pointerleave', () => {
-  if (!pinned) info.style.display = 'none';
+  clearTimeout(tooltipTimer);  // leaving the canvas cancels the tooltip
+  if (hoverRaf) { cancelAnimationFrame(hoverRaf); hoverRaf = null; }
+  if (!pinned) {
+    info.style.display = 'none';
+    if (hoverPf) { hoverPf = null; draw(); }
+  }
 });
 window.addEventListener('mousemove', e => {
   if (resizing) {  // panel width drag (desktop; hidden on touch layouts)
@@ -845,7 +941,7 @@ resizer.addEventListener('mousedown', e => {
   document.body.style.cursor = 'col-resize';
   e.preventDefault();
 });
-window.addEventListener('keydown', e => { if (e.key === 'Escape') { pinned = false; info.style.display = 'none'; } });
+window.addEventListener('keydown', e => { if (e.key === 'Escape') { pinned = false; info.style.display = 'none'; if (hoverPf) { hoverPf = null; draw(); } } });
 canvas.addEventListener('wheel', e => {
   e.preventDefault();
   const f = e.deltaY < 0 ? 1.2 : 1 / 1.2;
@@ -913,7 +1009,7 @@ def build_map_payload(features, schema, prop, zone_mapping,
                       page_title=None, page_subtitle=None, note=None,
                       links=None, src=None,
                       default_off=None, zone_definition=None, hatch=None,
-                      default_alpha=None, layer_names=None,
+                      highlight=None, default_alpha=None, layer_names=None,
                       street_tolerance=None):
     """Build the JSON payload for the interactive canvas viewer.
 
@@ -950,6 +1046,23 @@ def build_map_payload(features, schema, prop, zone_mapping,
         raise ValueError("hatch width and spacing must be positive")
     if not 0 <= hatch["fill"] <= 1:
         raise ValueError("hatch fill must be a number in [0, 1]")
+
+    # hovered-zone outline style: app-level only (from settings.json), no UI
+    hlight = highlight or {}
+    try:
+        to_rgb(hlight.get("color", "#111111"))
+    except (ValueError, TypeError):
+        raise ValueError("highlight color must be a valid color")
+    highlight = {
+        "color": hlight.get("color", "#111111"),
+        "width": float(hlight.get("width", 3.5)),
+        "dash": [float(v) for v in hlight.get("dash", (16.0, 12.0))],
+    }
+    if highlight["width"] <= 0:
+        raise ValueError("highlight width must be positive")
+    if len(highlight["dash"]) < 2 or not all(v > 0 for v in highlight["dash"]):
+        raise ValueError("highlight dash must be two or more positive "
+                         "numbers (px, on/off pattern)")
 
     if overlay:
         # the original per-layer colors form individually controllable
@@ -1071,6 +1184,7 @@ def build_map_payload(features, schema, prop, zone_mapping,
         "groups": groups,
         "features": entries,
         "hatch": hatch,
+        "highlight": highlight,
     }
     if streets:
         # streets are not a color group feature; add their group for the UI
@@ -1160,6 +1274,7 @@ DEFAULT_I18N = {
         "secLayers": "GML layers",
         "secGroups": "Environmental impact",
         "secStreets": "Streets",
+        "hoverDetails": "On-hover details",
         "opacity": "opacity",
         "details": "details",
         "language": "Language",
@@ -1179,6 +1294,7 @@ DEFAULT_I18N = {
         "secLayers": "Warstwy GML",
         "secGroups": "Oddziaływanie na środowisko",
         "secStreets": "Ulice",
+        "hoverDetails": "Szczegóły po najechaniu",
         "opacity": "przezroczystość",
         "details": "szczegóły",
         "language": "Język",
