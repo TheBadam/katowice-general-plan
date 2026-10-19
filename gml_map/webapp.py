@@ -186,8 +186,10 @@ const langMatch = location.pathname.match(/\/(en|pl)(\/|$)/);
 const LANG = langMatch ? langMatch[1]
   : ((navigator.language || 'pl').toLowerCase().startsWith('en') ? 'en' : 'pl');
 const MAPDATA_URL = (langMatch ? '../' : '') + 'mapdata.json';
-// UI labels: injected at export time from the built-in EN/PL set,
-// optionally overridden via --i18n (see i18n.json)
+// the greens layer downloads on demand, only when toggled on
+const GREENS_URL = (langMatch ? '../' : '') + 'greens.json';
+// UI labels: injected at export time from the i18n JSON file
+// (--i18n, the single source of truth; see i18n.json)
 const I18N = __I18N__;
 const L = I18N[LANG] || I18N.en;
 const canvas = document.getElementById('canvas');
@@ -195,6 +197,69 @@ const ctx = canvas.getContext('2d');
 const info = document.getElementById('info');
 let DATA = null, paths = [], streets = [], groups = {};
 let streetsPath = null;  // all streets merged into one Path2D
+let greensPaths = null;  // zone-type x green-class merged Path2Ds
+let greenStats = null;   // per-zone overlap stats for the tooltip
+let greensFailed = false;
+let greenCount = 0;
+// openstreetmap-carto landcover palette (osm.org standard style)
+const GREEN_COLORS = {forest: '#add19e', meadow: '#cdebb0',
+                      park: '#c8facc', scrub: '#adde8b',
+                      wetland: '#b6d5c0'};
+const greenPatternCache = {};
+function greenPattern(cls, px) {
+  // a 40 m ground tile at the current zoom, bucketed so zooming reuses
+  // tiles; symbols are laid out for a 32 px tile and scale with it
+  const t = Math.min(96, Math.max(8, Math.round(px / 4) * 4));
+  const key = cls + t;
+  let pat = greenPatternCache[key];
+  if (pat) return pat;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = t;
+  const c = cv.getContext('2d');
+  c.fillStyle = GREEN_COLORS[cls] || '#cdebb0';
+  c.fillRect(0, 0, t, t);
+  const r = t / 32;
+  if (cls === 'forest') {  // dark tree silhouettes, like osm.org woods
+    c.fillStyle = '#4f804d';
+    for (const [x, y] of [[8, 9], [21, 14], [13, 25]]) {
+      c.beginPath();
+      c.arc(x * r, y * r, 3.4 * r, 0, 2 * Math.PI);
+      c.fill();
+      c.fillRect((x - 0.7) * r, (y + 2.6) * r, 1.4 * r, 2.4 * r);
+    }
+  } else if (cls === 'meadow') {  // sparse grass tufts
+    c.strokeStyle = '#9cc178';
+    c.lineWidth = 1.1 * r; c.lineCap = 'round';
+    for (const [x, y] of [[7, 10], [19, 22], [26, 7]]) {
+      c.beginPath();
+      c.moveTo((x - 1.5) * r, (y + 2) * r);
+      c.lineTo(x * r, (y - 2) * r);
+      c.lineTo((x + 1.5) * r, (y + 2) * r);
+      c.stroke();
+    }
+  } else if (cls === 'scrub') {  // small shrub clusters
+    c.fillStyle = '#6fa15f';
+    for (const [x, y] of [[9, 8], [22, 15], [13, 25]]) {
+      for (const [dx, dy] of [[-1.4, -0.6], [1.2, -1], [0, 1.4]]) {
+        c.beginPath();
+        c.arc((x + dx) * r, (y + dy) * r, 1.6 * r, 0, 2 * Math.PI);
+        c.fill();
+      }
+    }
+  } else if (cls === 'wetland') {  // horizontal reed dashes
+    c.strokeStyle = '#4e8a72';
+    c.lineWidth = 1.3 * r; c.lineCap = 'round';
+    for (const [x, y] of [[7, 8], [19, 19], [25, 26]]) {
+      c.beginPath();
+      c.moveTo((x - 2) * r, y * r);
+      c.lineTo((x + 2) * r, y * r);
+      c.stroke();
+    }
+  }  // park: plain pastel fill, like osm.org parks
+  pat = ctx.createPattern(cv, 'repeat');
+  greenPatternCache[key] = pat;
+  return pat;
+}
 const zoneTitles = {};   // zone symbol -> full title (e.g. SI -> Strefa ...)
 let hoverPf = null;       // feature under the cursor (or pinned): outlined
 let tooltipOn = true;      // on-hover details tooltip on/off (sidebar switch)
@@ -318,6 +383,66 @@ function loadState() {
     }
   }
 }
+let greensLoading = false;
+async function fetchGreens() {
+  // download the greens layer on first use: default off, so visitors who
+  // never toggle it never pay for the extra ~1 MB (gzipped) download
+  if (greensPaths || greensLoading) return;
+  greensLoading = true;
+  const cnt = document.querySelector('#grp-greens .cnt');
+  if (cnt) cnt.textContent = '...';
+  try {
+    const res = await fetch(GREENS_URL);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    const feats = Array.isArray(data) ? data : (data.greens || []);
+    greenStats = Array.isArray(data) ? null : (data.stats || null);
+    // one Path2D per (zone type, green class): few fill calls per frame,
+    // and the zone-type toggles can still filter whole patches out
+    greensPaths = {};
+    greenCount = feats.length;
+    for (const g of feats) {
+      const key = g.sym + '|' + g.c;
+      let e = greensPaths[key];
+      if (!e) e = greensPaths[key] =
+        {p: new Path2D(), b: [1e18, 1e18, -1e18, -1e18], sym: g.sym, c: g.c};
+      for (const ring of g.parts[0]) {
+        if (ring.length < 8) continue;
+        e.p.moveTo(ring[0], ring[1]);
+        for (let i = 2; i < ring.length; i += 2) e.p.lineTo(ring[i], ring[i + 1]);
+        e.p.closePath();
+        for (let i = 0; i < ring.length; i += 2) {
+          if (ring[i] < e.b[0]) e.b[0] = ring[i];
+          if (ring[i + 1] < e.b[1]) e.b[1] = ring[i + 1];
+          if (ring[i] > e.b[2]) e.b[2] = ring[i];
+          if (ring[i + 1] > e.b[3]) e.b[3] = ring[i + 1];
+        }
+      }
+    }
+    if (cnt) cnt.textContent = greenCount;
+    draw();
+    // a tooltip opened before the download finished shows no stats yet:
+    // refresh it if it is still on screen
+    if (info.style.display !== 'none' && hoverPf)
+      showTooltip(hoverPf, lastHover.x, lastHover.y);
+  } catch (err) {
+    console.error('greens layer:', err);
+    greensFailed = true;  // do not retry on every tooltip; the layer
+                          // toggle can still trigger a fresh attempt
+    // revert the toggle so the panel reflects what actually rendered
+    const s = state['greens'];
+    if (s) s.on = false;
+    const el = document.querySelector('#grp-greens [data-toggle]');
+    if (el) el.checked = false;
+    const grp = document.getElementById('grp-greens');
+    if (grp) { grp.classList.add('off');
+               grp.title = L.loadError + GREENS_URL; }
+    if (cnt) cnt.textContent = '!';
+    saveState();
+  } finally {
+    greensLoading = false;
+  }
+}
 function initGroups() {
   for (const g of DATA.groups) {
     groups[g.name] = g;
@@ -372,6 +497,18 @@ function fit() {
   view.s = s;
   view.tx = (w - s * (minx + maxx)) / 2;
   view.ty = (h + s * (miny + maxy)) / 2;
+}
+function zoneTypeOff(sym) {
+  // a zone type counts as off when a *visible* zone-toggle group (the
+  // zone-type chips, e.g. under StrefaPlanistyczna) disables it. A hidden
+  // zone layer does not filter the greens: turning that layer off bulk
+  // deselects its chips, which must not blank the greens layer too
+  if (!sym) return false;
+  for (const name in state) {
+    const s = state[name];
+    if (s.zones && s.on && s.zones[sym] === false) return true;
+  }
+  return false;
 }
 function draw() {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -453,6 +590,25 @@ function draw() {
       ctx.beginPath();
       ctx.arc(pf.x, pf.y, 6 / view.s, 0, 2 * Math.PI);
       ctx.fill(); ctx.stroke();
+    }
+  }
+  // greens overlap layer: the green x zone intersection patches, on top
+  // of the overlays. Visibility follows the layer toggle plus the same
+  // zone-type chips that control the plan zones (e.g. StrefaPlanistyczna)
+  const stGr = state['greens'];
+  if (stGr && stGr.on && greensPaths) {
+    // OSM-style landcover: flat pastel fills at small scales, texture
+    // patterns once a 40 m tile is at least ~8 px on screen (osm.org
+    // likewise drops landcover textures at lower zooms)
+    const tpx = 40 * view.s;
+    for (const k in greensPaths) {
+      const gp = greensPaths[k];
+      if (zoneTypeOff(gp.sym)) continue;
+      if (!visible(gp.b)) continue;
+      ctx.globalAlpha = stGr.alpha;
+      ctx.fillStyle = tpx >= 8 ? greenPattern(gp.c, tpx)
+        : (GREEN_COLORS[gp.c] || '#cdebb0');
+      ctx.fill(gp.p, 'evenodd');
     }
   }
   // zone borders: stroked on top of overlays so they stay visible
@@ -548,9 +704,24 @@ function tooltipHtml(pf) {
       html += '<span class="desc">' + esc(short) + '</span>';
     }
   }
+  // green overlap stats for the hovered zone (needs the greens download)
+  if (greenStats && pf.ozn && greenStats[pf.ozn]) {
+    const s = greenStats[pf.ozn];
+    html += '<span class="desc"><b>' + esc(L.greens) + ':</b> ' +
+      s.pct + '% (' + s.green + ' ha / ' + s.ha + ' ha)';
+    const parts = [];
+    for (const c in (s.by || {}))
+      parts.push(esc(L['gc.' + c] || c) + ' ' + s.by[c] + '%');
+    if (parts.length) html += '<br>' + parts.join(' &middot; ');
+    html += '</span>';
+  }
   return html;
 }
 function showTooltip(pf, mx, my) {
+  // asking for a zone's green overlap (the tooltip) downloads the greens
+  // data too - the same single file the layer toggle fetches
+  if (pf.ozn && !greenStats && !greensLoading && !greensFailed)
+    fetchGreens();
   info.innerHTML = tooltipHtml(pf);
   info.style.display = 'block';
   info.style.left = Math.max(0, Math.min(mx + 14, window.innerWidth - 290)) + 'px';
@@ -582,6 +753,7 @@ function groupBlock(g, counts) {
   const st = state[g.name];
   const on = st.on;
   if (g.name === 'streets') counts[g.name] = streets.length;
+  if (g.name === 'greens') counts[g.name] = greenCount;
   const range = (attr, label, min, max, step, val) =>
     '<input type="range" min="' + min + '" max="' + max + '" step="' + step +
     '" value="' + val + '" data-' + attr + '="' + esc(g.name) +
@@ -591,7 +763,8 @@ function groupBlock(g, counts) {
     '<div class="head">' +
     '<input type="checkbox"' + (on ? ' checked' : '') + ' data-toggle="' + esc(g.name) + '">' +
     '<span class="swatch" style="background:' + swatchBackground(g) + '"></span>' +
-    '<label>' + esc(g.kind === 'streets' ? L.secStreets : (g.label || g.name)) +
+    '<label>' + esc(g.kind === 'streets' ? L.secStreets :
+      (g.i18n ? (L[g.i18n] || g.label || g.name) : (g.label || g.name))) +
     ' <span class="cnt">' + (counts[g.name] || 0) + '</span></label></div>' +
     (g.desc_title ? '<div class="gtitle">' + esc(g.desc_title) + '</div>' : '') +
     // zone-type toggles: full names in a two-column grid, color-coded
@@ -643,6 +816,8 @@ function buildPanel() {
     el.addEventListener('change', () => {
       const s = state[el.dataset.toggle];
       s.on = el.checked;
+      // the greens layer ships in a separate file, fetched on first enable
+      if (el.dataset.toggle === 'greens' && el.checked) fetchGreens();
       if (s.zones) {  // zone layers: master selects/deselects every zone
         for (const k in s.zones) s.zones[k] = el.checked;
         el.closest('.group').querySelectorAll('[data-zone]').forEach(z =>
@@ -811,6 +986,9 @@ async function load() {
     }
     streetsPath = sp;
   }
+  // a shared view may restore the greens layer as enabled: honor it by
+  // downloading the data right away (normally it loads on first toggle)
+  if (state['greens'] && state['greens'].on) fetchGreens();
   // the parsed payload is not needed past this point: free it for GC
   DATA.features = null;
   DATA.streets = null;
@@ -1044,7 +1222,8 @@ def build_map_payload(features, schema, prop, zone_mapping,
                       title, srs=None, resolve_key=None, streets=None,
                       overlay=False, descriptions=None,
                       page_title=None, page_subtitle=None, note=None,
-                      links=None, src=None, changelog=None,
+                      links=None, src=None, changelog=None, greens=None,
+                      greens_stats=None,
                       default_off=None, zone_definition=None, hatch=None,
                       highlight=None, default_alpha=None, layer_names=None,
                       street_tolerance=None):
@@ -1264,6 +1443,33 @@ def build_map_payload(features, schema, prop, zone_mapping,
             for i in range(0, len(r), 2):
                 xmin, ymin = min(xmin, r[i]), min(ymin, r[i + 1])
                 xmax, ymax = max(xmax, r[i]), max(ymax, r[i + 1])
+    if greens:
+        # green x zone intersection polygons: a toggleable "Greens" layer
+        # in the GML layers section; each part honors the zone-type
+        # toggles via its zone symbol (`sym`)
+        payload["groups"].append({"name": "greens", "i18n": "greens",
+                                  "color": "#add19e",
+                                  "edge": "#7aa86e", "alpha": 0.75,
+                                  "kind": "layer"})
+        web_greens = []
+        for g in greens:
+            part = []
+            for ring in g["rings"]:
+                flat = []
+                for x, y in ring:
+                    flat.append(round(x, 2))
+                    flat.append(round(y, 2))
+                if len(flat) >= 8:
+                    part.append(flat)
+                    xmin, ymin = min(xmin, x), min(ymin, y)
+                    xmax, ymax = max(xmax, x), max(ymax, y)
+            if part:
+                web_greens.append({"parts": [part],
+                                   "sym": g.get("sym", ""),
+                                   "c": g.get("cls", "")})
+        payload["greens"] = web_greens
+    if greens_stats is not None:
+        payload["greens_stats"] = greens_stats
 
     # Rebase all coordinates to a local origin. Browsers store canvas
     # path points as 32-bit floats, so absolute coordinates of millions
@@ -1291,6 +1497,10 @@ def build_map_payload(features, schema, prop, zone_mapping,
             _shift_ring(s["parts"][0])
             s["lab"] = [round(v - (ox if i % 2 == 0 else oy), 2)
                         for i, v in enumerate(s["lab"])]
+    if payload.get("greens"):
+        for g in payload["greens"]:
+            for ring in g["parts"][0]:
+                _shift_ring(ring)
 
     payload["bounds"] = [0, 0, round(xmax - ox, 2), round(ymax - oy, 2)]
     payload["page_title"] = page_title or title
@@ -1305,69 +1515,28 @@ def build_map_payload(features, schema, prop, zone_mapping,
     return payload
 
 
-# Built-in UI labels for the viewer page (the keys the page script looks
-# up); --i18n (see i18n.json) layers overrides on top of this set.
-DEFAULT_I18N = {
-    "en": {
-        "secLayers": "GML layers",
-        "secGroups": "Environmental impact",
-        "secStreets": "Streets",
-        "hoverDetails": "On-hover details",
-        "opacity": "opacity",
-        "details": "details",
-        "language": "Language",
-        "links": "Links",
-        "zoomIn": "Zoom in",
-        "zoomOut": "Zoom out",
-        "reset": "Reset view",
-        "png": "Download PNG",
-        "explanation": "Explanation",
-        "changelog": "Changelog",
-        "loadError": "Failed to load map data from ",
-        "layer": "layer",
-        "group": "group",
-        "symbol": "symbol",
-        "data": "data: ",
-    },
-    "pl": {
-        "secLayers": "Warstwy GML",
-        "secGroups": "Oddziaływanie na środowisko",
-        "secStreets": "Ulice",
-        "hoverDetails": "Szczegóły po najechaniu",
-        "opacity": "przezroczystość",
-        "details": "szczegóły",
-        "language": "Język",
-        "links": "Linki",
-        "zoomIn": "Przybliż",
-        "zoomOut": "Oddal",
-        "reset": "Resetuj widok",
-        "png": "Pobierz PNG",
-        "explanation": "Wyjaśnienie",
-        "changelog": "Lista zmian",
-        "loadError": "Nie udało się wczytać danych mapy z ",
-        "layer": "warstwa",
-        "group": "grupa",
-        "symbol": "symbol",
-        "data": "dane: ",
-    },
-}
+# UI labels for the viewer page are not built in: the i18n JSON file
+# passed with --i18n (e.g. i18n.json) is the single source of truth and
+# must define every label the page script looks up.
 
 
 def merged_i18n(override=None):
-    """DEFAULT_I18N updated with {lang: {key: text}} entries of `override`."""
-    i18n = {lang: dict(labels) for lang, labels in DEFAULT_I18N.items()}
-    for lang, labels in (override or {}).items():
-        i18n.setdefault(lang, {}).update(labels)
-    return i18n
+    """The complete UI label set {lang: {key: text}} for the viewer page.
+
+    The i18n JSON file (see --i18n / i18n.json) is the single source of
+    truth: it must define every label the page script looks up.
+    """
+    return {lang: dict(labels) for lang, labels in (override or {}).items()}
 
 
 def interactive_page_html(i18n=None):
     """The interactive viewer page for the static export.
 
-    `i18n`: optional {lang: {key: text}} UI labels layered over the
-    built-in EN/PL set; embedded into the page as JSON.
-    The mapdata URL and the language are computed client-side from the page
-    URL, so the same HTML works at any path (incl. /en/ and /pl/ subpaths).
+    `i18n`: {lang: {key: text}} UI labels from the i18n JSON file (the
+    single source of truth, passed via --i18n); embedded into the page
+    as JSON. The mapdata URL and the language are computed client-side
+    from the page URL, so the same HTML works at any path (incl. /en/
+    and /pl/ subpaths).
     """
     html = _INTERACTIVE_HTML.replace(
         "__I18N__", json.dumps(merged_i18n(i18n), ensure_ascii=False))
@@ -1379,8 +1548,9 @@ def export_static(payload, out_dir, i18n=None):
 
     Produces index.html (auto language) plus en/ and pl/ copies, and
     mapdata.json; hostable on any static file server (nginx, GitHub Pages,
-    S3, ...). `i18n` overrides the built-in UI labels ({lang: {key: text}},
-    see i18n.json). No Python is needed at serving time.
+    S3, ...). `i18n` carries the viewer UI labels ({lang: {key: text}},
+    see i18n.json) - the single source of truth, so it is required.
+    No Python is needed at serving time.
     Returns the index.html path.
     """
     out = Path(out_dir)
@@ -1391,6 +1561,15 @@ def export_static(payload, out_dir, i18n=None):
         sub = out / lang
         sub.mkdir(exist_ok=True)
         (sub / "index.html").write_text(html, encoding="utf-8")
+    # the greens layer is bulky, so it lives in its own file and is only
+    # downloaded when the user toggles the layer on (or hovers a zone,
+    # which needs the per-zone overlap stats for the tooltip)
+    greens = payload.pop("greens", None)
+    stats = payload.pop("greens_stats", None)
     (out / "mapdata.json").write_text(
         json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    if greens is not None or stats is not None:
+        (out / "greens.json").write_text(
+            json.dumps({"greens": greens or [], "stats": stats or {}},
+                       ensure_ascii=False), encoding="utf-8")
     return out / "index.html"

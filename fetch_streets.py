@@ -21,7 +21,6 @@ import urllib.request
 MIRRORS = [
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
-    "https://overpass.openstreetmap.ru/api/interpreter",
 ]
 DEFAULT_HIGHWAYS = ("motorway|trunk|primary|secondary|tertiary|unclassified|"
                     "residential|living_street")

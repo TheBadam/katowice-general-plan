@@ -2,6 +2,15 @@
 
 ## 2026-10-18
 
+- Nowa warstwa "Open Street Map (zieleń)" w sekcji warstw GML: pokazuje
+  miejsca, w których tereny zielone z OpenStreetMap (lasy, łąki,
+  parki...) nakładają się na strefy planistyczne. Widoczność sterowana
+  przełącznikami typów stref, ale wyłączenie warstwy stref nie ukrywa
+  zieleni. Warstwa jest domyślnie wyłączona, a jej dane (osobny plik
+  greens.json) pobierają się dopiero po włączeniu. Kolory i wzory
+  terenów zielonych jak w standardowym stylu OpenStreetMap.
+- Dymek strefy pokazuje udział terenów zielonych (procent i hektary);
+  najechanie na strefę pobiera dane greens.json, jeśli jeszcze ich nie ma.
 - Nowa zwijana sekcja "Lista zmian" w panelu bocznym (zwinięta domyślnie).
 - Szczegóły elementu po najechaniu kursorem (hover details).
 - Pełne tłumaczenia EN/PL interfejsu.

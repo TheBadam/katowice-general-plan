@@ -222,3 +222,17 @@ __marimo__/
 static_site/
 static_site.zip
 static_site.7z
+
+# generated viewer output (regenerable: gml_viewer.py -o <name>.png)
+*_map.png
+map.png
+katowice.png
+
+# OSM-derived data - regenerable with fetch_streets.py / fetch_greens.py /
+# greens_overlap.py. ODbL licensed: attribute "© OpenStreetMap
+# contributors" when redistributing; do not commit bulk extracts.
+streets.geojson
+greens.geojson
+greens_intersections.geojson
+greens_stats.json
+greens_overlap.json

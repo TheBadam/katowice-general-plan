@@ -320,6 +320,56 @@ def load_streets(path):
     return out
 
 
+def load_greens_overlay(path):
+    """Load green-area intersection polygons from a GeoJSON file
+    (greens_overlap.py --intersections output).
+
+    Returns a list of {"rings": [[(x, y), ...], ...], "sym", "cls"} in the
+    same CRS as the plan (no reprojection is applied). `sym` is the zone
+    type (e.g. SN) used by the viewer to honor the zone-type toggles.
+    """
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        sys.exit(f"Error: {path} is not valid JSON: {e}")
+    if isinstance(data, dict):
+        feats = [data] if data.get("type") == "Feature" \
+            else data.get("features", [])
+    elif isinstance(data, list):
+        feats = data
+    else:
+        sys.exit(f"Error: {path} is not a GeoJSON file")
+
+    from shapely.geometry import shape
+
+    out = []
+
+    def add_geom(geom, props):
+        if geom.is_empty or geom.geom_type not in ("Polygon",
+                                                   "MultiPolygon"):
+            return
+        polys = ([geom] if geom.geom_type == "Polygon"
+                 else list(geom.geoms))
+        rings = []
+        for poly in polys:
+            if poly.exterior is None:
+                continue
+            rings.append([(float(x), float(y))
+                          for x, y in poly.exterior.coords])
+            rings.extend([(float(x), float(y))
+                          for x, y in r.coords] for r in poly.interiors)
+        if rings:
+            out.append({"rings": rings,
+                        "sym": str(props.get("sym", "")),
+                        "cls": str(props.get("class", ""))})
+
+    for f in feats:
+        if not isinstance(f, dict) or not f.get("geometry"):
+            continue
+        add_geom(shape(f["geometry"]), f.get("properties") or {})
+    return out
+
+
 def load_zone_definition(path):
     """Load zone-type definitions (e.g. the "zone" section of settings.json):
     {symbol: {"title", "color", "stroke"}}.
@@ -525,8 +575,9 @@ def main(argv=None):
                         "in the viewer; key order sets the layer control "
                         "order")
     p.add_argument("--i18n", metavar="JSON",
-                   help="viewer UI labels {lang: {key: text}} layered over "
-                        "the built-in EN/PL set (e.g. i18n.json)")
+                   help="viewer UI labels {lang: {key: text}}; the single "
+                        "source of truth, required for --export-static "
+                        "(e.g. i18n.json)")
     p.add_argument("--overlay", action="store_true",
                    help="with --zones/--colors: paint groups as "
                         "semi-transparent overlays on top of the original "
@@ -534,6 +585,15 @@ def main(argv=None):
     p.add_argument("--streets", metavar="GEOJSON",
                    help="overlay named streets from a GeoJSON file "
                         "(see fetch_streets.py)")
+    p.add_argument("--greens", metavar="GEOJSON",
+                   help="overlay green-area intersection polygons "
+                        "(zone x OSM green; see greens_overlap.py "
+                        "--intersections) shown as a 'Greens' layer "
+                        "controlled by the zone-type toggles")
+    p.add_argument("--greens-stats", metavar="JSON",
+                   help="per-zone green overlap stats (greens_overlap.py "
+                        "--stats) shown in the zone tooltip; travels with "
+                        "the --greens data file")
     p.add_argument("--street-simplify", type=float, default=1.0,
                    metavar="TOL",
                    help="Douglas-Peucker tolerance for street geometry in "
@@ -647,6 +707,17 @@ def main(argv=None):
                    if args.layer_names else None)
     i18n = load_i18n(args.i18n) if args.i18n else None
     streets = load_streets(args.streets) if args.streets else None
+    greens = load_greens_overlay(args.greens) if args.greens else None
+    greens_stats = None
+    if args.greens_stats:
+        try:
+            greens_stats = json.loads(
+                Path(args.greens_stats).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as e:
+            sys.exit(f"Error: cannot read {args.greens_stats}: {e}")
+        if not isinstance(greens_stats, dict):
+            sys.exit(f"Error: {args.greens_stats} must be a JSON object "
+                     "{zone: {...}}")
     descriptions = None
     if args.descriptions:
         try:
@@ -692,6 +763,13 @@ def main(argv=None):
         print(f"Streets: {len(streets)} lines "
               f"({len({s['name'] for s in streets if s['name']})} named) "
               f"from {args.streets}")
+    if greens:
+        print(f"Greens: {len(greens)} intersection polygons "
+              f"({len({g['sym'] for g in greens})} zone types) "
+              f"from {args.greens}")
+        if greens_stats:
+            print(f"Greens stats: {len(greens_stats)} zones "
+                  f"from {args.greens_stats}")
 
     def make_web_payload():
         """Build the interactive-viewer payload (None without a color mode)."""
@@ -710,6 +788,7 @@ def main(argv=None):
             descriptions=descriptions,
             page_title=args.page_title, page_subtitle=args.page_subtitle,
             note=note, links=links, changelog=changelog,
+            greens=greens, greens_stats=greens_stats,
             src=Path(args.input).name,
             default_off=args.default_off or None,
             default_alpha=default_alpha,
@@ -722,6 +801,10 @@ def main(argv=None):
         if payload is None:
             sys.exit("Error: --export-static requires "
                      "--zones/--colors/--settings")
+        if not i18n:
+            sys.exit("Error: --export-static requires --i18n: "
+                     "the i18n JSON file is the single source of "
+                     "viewer UI labels")
         index = export_static(payload, args.export_static, i18n)
         if color_report:
             color_report()

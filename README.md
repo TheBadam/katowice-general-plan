@@ -97,9 +97,10 @@ for the language folders), so it works at any path. Pre-generate a preview
 PNG with `-o map.png` in the same command.
 
 All viewer UI labels (panel section headers, buttons, tooltips, the load
-error message) live in one config file, `i18n.json`, passed with `--i18n`
-and layered over the built-in EN/PL set; without it the built-in set is
-used. Page links translate as well: a `--page-link KEY=URL` entry shows
+error message) live in one config file, `i18n.json`, passed with `--i18n`;
+it is the single source of truth for labels - the viewer has no built-in
+set, so `--i18n` is required for `--export-static`. Page links translate
+as well: a `--page-link KEY=URL` entry shows
 the current language's `link.KEY` label from `i18n.json`, falling back to
 the raw name when there is no such entry. The language still follows the
 URL (`/en/`, `/pl/`); auto-detected
@@ -219,7 +220,9 @@ Try it on the bundled synthetic example:
 | `--changelog FILE` | Markdown shown in the sidebar as a collapsible "Changelog" section (collapsed by default, not part of the shareable URL state) |
 | `--page-link NAME=URL` | Link shown at the top of the page (repeatable) |
 | `--streets GEOJSON` | Overlay named streets (see fetch_streets.py) |
-| `--i18n JSON` | Viewer UI labels `{lang: {key: text}}` layered over the built-in EN/PL set (e.g. `i18n.json`) |
+| `--greens GEOJSON` | Overlay green x zone intersection polygons (see greens_overlap.py `--intersections`) as an "Open Street Map (greens)" layer that follows the zone-type toggles (but stays visible when the zone layer itself is off); exported to a separate `greens.json` downloaded by the browser only when the layer is toggled on |
+| `--greens-stats JSON` | Per-zone green overlap stats (see greens_overlap.py `--stats`) shown in the zone tooltip; travels inside the same on-demand `greens.json` |
+| `--i18n JSON` | Viewer UI labels `{lang: {key: text}}` - the single source of truth, required for `--export-static` (e.g. `i18n.json`) |
 | `--geojson PATH` | Export features to GeoJSON |
 | `--swap-xy` | Force swapping coordinate pairs (fix axis order manually) |
 | `--no-swap` | Disable automatic axis-order correction |

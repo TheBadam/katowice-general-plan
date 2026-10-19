@@ -13,11 +13,14 @@ cd "$(dirname "$0")"
     --overlay \
     --default-off AktPlanowaniaPrzestrzennego \
     --default-off ObszarZabudowySrodmiejskiej \
+    --default-off greens \
     --default-alpha StrefaPlanistyczna=0.75 \
     --default-alpha ObszarUzupelnieniaZabudowy=0.75 \
     --layer-names layer_names.json \
     --i18n i18n.json \
     --streets streets.geojson \
+    --greens greens_intersections.geojson \
+    --greens-stats greens_stats.json \
     --descriptions zones_description.json \
     --page-title "Potencjalne zagrożenia stanu środowiska, mogące wystąpić w wyniku realizacji Planu Ogólnego." \
     --page-subtitle "Na bazie \"Prognozy oddziaływania na środowisko projektu Planu Ogólnego miasta Katowice\",dr Grzegorz Synowiec, Katowice 04.10.2026r" \
