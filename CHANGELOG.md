@@ -11,6 +11,7 @@
   terenów zielonych jak w standardowym stylu OpenStreetMap.
 - Dymek strefy pokazuje udział terenów zielonych (procent i hektary);
   najechanie na strefę pobiera dane greens.json, jeśli jeszcze ich nie ma.
+- Dane terenów zielonych: © OpenStreetMap contributors (ODbL).
 - Nowa zwijana sekcja "Lista zmian" w panelu bocznym (zwinięta domyślnie).
 - Szczegóły elementu po najechaniu kursorem (hover details).
 - Pełne tłumaczenia EN/PL interfejsu.

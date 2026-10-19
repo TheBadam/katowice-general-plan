@@ -1450,7 +1450,9 @@ def build_map_payload(features, schema, prop, zone_mapping,
         payload["groups"].append({"name": "greens", "i18n": "greens",
                                   "color": "#add19e",
                                   "edge": "#7aa86e", "alpha": 0.75,
-                                  "kind": "layer"})
+                                  "kind": "layer",
+                                  "desc": "© OpenStreetMap contributors "
+                                          "(ODbL)"})
         web_greens = []
         for g in greens:
             part = []

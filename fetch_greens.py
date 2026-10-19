@@ -23,7 +23,6 @@ import urllib.request
 MIRRORS = [
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
-    "https://overpass.openstreetmap.ru/api/interpreter",
 ]
 
 # Green-class -> Overpass tag filters (key=value regex alternation).

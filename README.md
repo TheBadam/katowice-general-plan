@@ -27,6 +27,30 @@ legend, prints attribute tables, and can export everything to GeoJSON.
   interactive **static web map** via `--export-static`, a PNG image, an
   attribute dump, and a GeoJSON export.
 
+## Data sources and licenses
+
+- **Plan data** (`katowice_plan_ogolny_26.gml`): the official spatial plan
+  register of Poland (rejestr-urbanistyczny.gov.pl), reused as public
+  information.
+- **Street and green-area overlays**: OpenStreetMap data, fetched via the
+  Overpass API. Copyright © OpenStreetMap contributors, available under
+  the [Open Database License (ODbL)](https://opendatacommons.org/licenses/odbl/).
+  Any redistribution of the extracts or of derived products (including the
+  exported viewer's greens layer) must carry this attribution.
+
+The OSM extracts and their derivatives are **not committed** - they are
+regenerable with:
+
+```bash
+.venv/bin/python fetch_streets.py plan.gml -o streets.geojson
+.venv/bin/python fetch_greens.py plan.gml -o greens.geojson
+.venv/bin/python greens_overlap.py plan.gml greens.geojson \
+    --intersections greens_intersections.geojson \
+    --stats greens_stats.json -o greens_overlap.json
+```
+
+Generated viewer images (`*_map.png`) are also gitignored.
+
 ## Install
 
 Requires Python 3.10+.
