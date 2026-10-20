@@ -1596,6 +1596,12 @@ def export_static(payload, out_dir, i18n=None):
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
+    # the gzip .htaccess belongs on the server, above the site files
+    # (see README), never in the exported assets: drop a stale one so
+    # the bundle cannot ship it
+    stale = out / ".htaccess"
+    if stale.exists():
+        stale.unlink()
     html = interactive_page_html(i18n)
     (out / "index.html").write_text(html, encoding="utf-8")
     for lang in ("en", "pl"):
