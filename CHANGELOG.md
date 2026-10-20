@@ -1,5 +1,16 @@
 # Lista zmian / Changelog
 
+## 2026-10-20
+
+- Atrybucja danych "© OpenStreetMap contributors (ODbL)" zawsze
+  widoczna w sekcjach warstwy zieleni i ulic (wcześniej zwinięta
+  w "szczegółach"). Przywrócony suwak przezroczystości ulic.
+- Rzadsza tekstura terenów zielonych: ok. 10 symboli na kafel wzorca
+  (jak w standardowym stylu OpenStreetMap przy dużym zbliżeniu),
+  zakotwiczona w terenie — nie przesuwa się względem mapy podczas
+  przesuwania widoku. Kafel tekstury delikatnie rośnie wraz ze
+  zbliżeniem: od 64 px przy widoku całego planu do maksimum 256 px.
+
 ## 2026-10-18
 
 - Nowa warstwa "Open Street Map (zieleń)" w sekcji warstw GML: pokazuje

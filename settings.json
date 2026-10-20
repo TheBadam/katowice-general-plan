@@ -22,5 +22,5 @@
     "SK": {"title": "Strefa komunikacyjna", "color": "#984ea3", "stroke": "#191919", "alpha": 1.0},
     "SP": {"title": "Strefa gospodarcza", "color": "#8c564b", "stroke": "#191919", "alpha": 1.0}
   },
-  "highlight": {"color": "#1e1e1e", "width": 3.5, "dash": [16, 12]}
+  "highlight": {"color": "#1e1e1e", "width": 2.5, "dash": [16, 12]}
 }

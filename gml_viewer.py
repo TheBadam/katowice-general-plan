@@ -412,7 +412,9 @@ def load_settings(path):
 
     {"group": <color schema + optional "global_hatch">,
      "zone": {symbol: {"title", "color", "stroke", "alpha"}},
-     "highlight": {"color": ..., "width": px, "dash": [on, off, ...] in px}}
+     "highlight": {"color": ..., "width": px, "dash": [on, off, ...] in px}
+     (highlight keys are optional; the viewer's built-in defaults cover
+     the missing ones)}
     """
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -437,25 +439,30 @@ def load_settings(path):
     if not isinstance(highlight, dict):
         sys.exit(f"Error: {path}: highlight must be an object")
     if highlight:
-        width = highlight.get("width", 3.5)
-        if not isinstance(width, (int, float)) or not width > 0:
-            sys.exit(f"Error: {path}: highlight width must be a "
-                     "positive number")
-        dash = highlight.get("dash", [16, 12])
-        if (not isinstance(dash, list) or len(dash) < 2
-                or not all(isinstance(v, (int, float)) and v > 0
-                           for v in dash)):
-            sys.exit(f"Error: {path}: highlight dash must be a list of "
-                     "two or more positive numbers (px, on/off pattern)")
-        color = highlight.get("color", "#111111")
-        try:
-            from matplotlib.colors import to_rgb
-            to_rgb(color)
-        except (ValueError, TypeError):
-            sys.exit(f"Error: {path}: highlight color must be a valid "
-                     f"color: {color!r}")
-        out["highlight"] = {"color": color, "width": float(width),
-                            "dash": [float(v) for v in dash]}
+        # only the provided keys travel to the viewer; its built-in
+        # highlight defaults cover the rest, so settings.json stays the
+        # single config source for this style
+        out["highlight"] = dict(highlight)
+        if "width" in highlight:
+            width = highlight["width"]
+            if not isinstance(width, (int, float)) or not width > 0:
+                sys.exit(f"Error: {path}: highlight width must be a "
+                         "positive number")
+        if "dash" in highlight:
+            dash = highlight["dash"]
+            if (not isinstance(dash, list) or len(dash) < 2
+                    or not all(isinstance(v, (int, float)) and v > 0
+                               for v in dash)):
+                sys.exit(f"Error: {path}: highlight dash must be a list "
+                         "of two or more positive numbers (px, on/off "
+                         "pattern)")
+        if "color" in highlight:
+            try:
+                from matplotlib.colors import to_rgb
+                to_rgb(highlight["color"])
+            except (ValueError, TypeError):
+                sys.exit(f"Error: {path}: highlight color must be a "
+                         f"valid color: {highlight['color']!r}")
     else:
         out["highlight"] = None
     return out

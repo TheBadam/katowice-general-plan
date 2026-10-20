@@ -89,6 +89,8 @@ _INTERACTIVE_HTML = r"""<!DOCTYPE html>
                                 line-height: 1.5; white-space: normal; }
   .group .desc { color: #555; font-size: 11px; margin-top: 4px;
                  white-space: normal; line-height: 1.4; }
+  .group .attrib { color: #555; font-size: 11px; margin-top: 4px;
+                   white-space: normal; }
   .btns button { margin: 3px 0; padding: 5px 8px; font-size: 12px;
                  width: 100%; cursor: pointer; }
   #panel a { color: #0366d6; font-size: 12px; display: block; margin: 10px 0; }
@@ -205,59 +207,84 @@ let greenCount = 0;
 const GREEN_COLORS = {forest: '#add19e', meadow: '#cdebb0',
                       park: '#c8facc', scrub: '#adde8b',
                       wetland: '#b6d5c0'};
-const greenPatternCache = {};
-function greenPattern(cls, px) {
-  // a 40 m ground tile at the current zoom, bucketed so zooming reuses
-  // tiles; symbols are laid out for a 32 px tile and scale with it
-  const t = Math.min(96, Math.max(8, Math.round(px / 4) * 4));
-  const key = cls + t;
-  let pat = greenPatternCache[key];
-  if (pat) return pat;
-  const cv = document.createElement('canvas');
-  cv.width = cv.height = t;
-  const c = cv.getContext('2d');
-  c.fillStyle = GREEN_COLORS[cls] || '#cdebb0';
-  c.fillRect(0, 0, t, t);
-  const r = t / 32;
-  if (cls === 'forest') {  // dark tree silhouettes, like osm.org woods
-    c.fillStyle = '#4f804d';
-    for (const [x, y] of [[8, 9], [21, 14], [13, 25]]) {
-      c.beginPath();
-      c.arc(x * r, y * r, 3.4 * r, 0, 2 * Math.PI);
-      c.fill();
-      c.fillRect((x - 0.7) * r, (y + 2.6) * r, 1.4 * r, 2.4 * r);
-    }
-  } else if (cls === 'meadow') {  // sparse grass tufts
-    c.strokeStyle = '#9cc178';
-    c.lineWidth = 1.1 * r; c.lineCap = 'round';
-    for (const [x, y] of [[7, 10], [19, 22], [26, 7]]) {
-      c.beginPath();
-      c.moveTo((x - 1.5) * r, (y + 2) * r);
-      c.lineTo(x * r, (y - 2) * r);
-      c.lineTo((x + 1.5) * r, (y + 2) * r);
-      c.stroke();
-    }
-  } else if (cls === 'scrub') {  // small shrub clusters
-    c.fillStyle = '#6fa15f';
-    for (const [x, y] of [[9, 8], [22, 15], [13, 25]]) {
-      for (const [dx, dy] of [[-1.4, -0.6], [1.2, -1], [0, 1.4]]) {
+let greenRate = 0.2;  // texture growth rate with zoom, established by
+                      // tuning: 0 = constant on-screen size, 0.5 = grows
+                      // with the square root of the zoom
+let greenMin = 64;    // texture tile size (px) at the fit zoom - also the
+                      // floor when zoomed out
+let greenMax = 256;   // texture tile size (px) cap at deep zoom
+let fitScale = 1;     // view.s at the fit zoom: the texture reference
+const greenPatternCache = {};  // cls -> pattern (one raster size at a time)
+const greenPatternT = {};      // cls -> raster px the pattern was built at
+function greenPattern(cls) {
+  // One ground-anchored tile per class: the pattern transform maps
+  // pattern pixels to world units (the negative y undoes the world
+  // transform's y-flip), so the texture sticks to the ground while
+  // panning. Its on-screen size grows with zoom at rate greenRate,
+  // from greenMin px at the fit zoom - never below it, so zooming
+  // out never gets denser than that - up to the greenMax cap:
+  //   T = greenMin * (view.s / fitScale)^greenRate
+  // The raster is drawn once at the greenMax cap, so the tile is
+  // only ever downscaled on screen: crisp at every size. ~10
+  // elements per tile: the density of the OSM standard style at
+  // high zoom.
+  const T = Math.min(greenMax,
+    greenMin * Math.max(1, Math.pow(view.s / fitScale, greenRate)));
+  const t = Math.round(greenMax * dpr);
+  let pat = greenPatternCache[cls];
+  if (!pat || greenPatternT[cls] !== t) {
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = t;
+    const c = cv.getContext('2d');
+    c.fillStyle = GREEN_COLORS[cls] || '#cdebb0';
+    c.fillRect(0, 0, t, t);
+    const r = t / 32;
+    if (cls === 'forest') {  // dark tree silhouettes, like osm.org woods
+      c.fillStyle = '#4f804d';
+      for (const [x, y] of [[5, 4], [14, 3], [23, 6], [9, 13], [19, 11],
+                           [5, 21], [14, 19], [23, 22], [9, 29], [19, 27]]) {
         c.beginPath();
-        c.arc((x + dx) * r, (y + dy) * r, 1.6 * r, 0, 2 * Math.PI);
+        c.arc(x * r, y * r, 1.6 * r, 0, 2 * Math.PI);
+        c.fill();
+        c.fillRect((x - 0.35) * r, (y + 1.1) * r, 0.7 * r, 1.3 * r);
+      }
+    } else if (cls === 'meadow') {  // sparse grass tufts
+      c.strokeStyle = '#9cc178';
+      c.lineWidth = 0.55 * r; c.lineCap = 'round';
+      for (const [x, y] of [[8, 6], [17, 4], [26, 7], [12, 14], [22, 12],
+                           [8, 22], [17, 20], [26, 23], [12, 30], [22, 28]]) {
+        c.beginPath();
+        c.moveTo((x - 1.5) * r, (y + 1.5) * r);
+        c.lineTo(x * r, (y - 1.5) * r);
+        c.lineTo((x + 1.5) * r, (y + 1.5) * r);
+        c.stroke();
+      }
+    } else if (cls === 'scrub') {  // small shrubs, one blob each
+      c.fillStyle = '#6fa15f';
+      for (const [x, y] of [[3, 8], [12, 6], [21, 9], [7, 17], [17, 15],
+                            [3, 24], [12, 22], [21, 25], [7, 30], [17, 28]]) {
+        c.beginPath();
+        c.arc(x * r, y * r, 1.5 * r, 0, 2 * Math.PI);
         c.fill();
       }
-    }
-  } else if (cls === 'wetland') {  // horizontal reed dashes
-    c.strokeStyle = '#4e8a72';
-    c.lineWidth = 1.3 * r; c.lineCap = 'round';
-    for (const [x, y] of [[7, 8], [19, 19], [25, 26]]) {
-      c.beginPath();
-      c.moveTo((x - 2) * r, y * r);
-      c.lineTo((x + 2) * r, y * r);
-      c.stroke();
-    }
-  }  // park: plain pastel fill, like osm.org parks
-  pat = ctx.createPattern(cv, 'repeat');
-  greenPatternCache[key] = pat;
+    } else if (cls === 'wetland') {  // horizontal reed dashes in rows
+      c.strokeStyle = '#4e8a72';
+      c.lineWidth = 0.65 * r; c.lineCap = 'round';
+      for (const [x, y] of [[6, 5], [15, 4], [24, 6], [10, 13], [20, 11],
+                            [6, 20], [15, 19], [24, 21], [10, 28], [20, 26]]) {
+        c.beginPath();
+        c.moveTo((x - 2) * r, y * r);
+        c.lineTo((x + 2) * r, y * r);
+        c.stroke();
+      }
+    }  // park: plain pastel fill, like osm.org parks
+    pat = ctx.createPattern(cv, 'repeat');
+    greenPatternCache[cls] = pat;
+    greenPatternT[cls] = t;
+  }
+  // scale pattern px -> world units so the tile covers T screen px
+  const m = T / (t * view.s);
+  pat.setTransform(new DOMMatrix([m, 0, 0, -m, 0, 0]));
   return pat;
 }
 const zoneTitles = {};   // zone symbol -> full title (e.g. SI -> Strefa ...)
@@ -275,6 +302,9 @@ let dpr = 1;
 let HATCH = {width: 2.5, spacing: 16, fill: 0};
 // hovered-zone outline style: app-level only (from mapdata), no UI.
 // color, width/dash segments in CSS px; dash is an on/off pattern.
+// built-in highlight fallback for deployments whose settings define no
+// highlight section; the app's live values come from settings.json (the
+// single config source) and merge over these
 let HIGHLIGHT = {color: '#111', width: 3.5, dash: [16, 12]};
 
 function esc(s) {
@@ -495,6 +525,7 @@ function fit() {
   const w = canvas.clientWidth, h = canvas.clientHeight;
   const s = Math.min(w / (maxx - minx), h / (maxy - miny)) * 0.95;
   view.s = s;
+  fitScale = s;  // greens texture reference zoom (see greenPattern)
   view.tx = (w - s * (minx + maxx)) / 2;
   view.ty = (h + s * (miny + maxy)) / 2;
 }
@@ -597,17 +628,15 @@ function draw() {
   // zone-type chips that control the plan zones (e.g. StrefaPlanistyczna)
   const stGr = state['greens'];
   if (stGr && stGr.on && greensPaths) {
-    // OSM-style landcover: flat pastel fills at small scales, texture
-    // patterns once a 40 m tile is at least ~8 px on screen (osm.org
-    // likewise drops landcover textures at lower zooms)
-    const tpx = 40 * view.s;
+    // OSM-style landcover texture: ground-anchored and growing with
+    // zoom at rate greenRate, from the fit-zoom reference density
+    // (never denser than that; see greenPattern)
     for (const k in greensPaths) {
       const gp = greensPaths[k];
       if (zoneTypeOff(gp.sym)) continue;
       if (!visible(gp.b)) continue;
       ctx.globalAlpha = stGr.alpha;
-      ctx.fillStyle = tpx >= 8 ? greenPattern(gp.c, tpx)
-        : (GREEN_COLORS[gp.c] || '#cdebb0');
+      ctx.fillStyle = greenPattern(gp.c);
       ctx.fill(gp.p, 'evenodd');
     }
   }
@@ -620,7 +649,7 @@ function draw() {
     if (!visible(pf.b)) continue;
     ctx.globalAlpha = 1;
     ctx.strokeStyle = pf.be;
-    ctx.lineWidth = 1.2 / view.s;
+    ctx.lineWidth = 0.6 / view.s;
     ctx.stroke(pf.p);
   }
   // hovered (or pinned) zone: dashed outline on top of all zone rendering
@@ -640,7 +669,7 @@ function draw() {
     ctx.lineWidth = 1.1 / view.s;
     ctx.stroke(streetsPath);
   }
-  ctx.globalAlpha = 1;
+  ctx.globalAlpha = (stS && stS.on) ? stS.alpha : 1;
   if (stS && stS.on) drawStreetLabels(visible);
 }
 function drawStreetLabels(visible) {
@@ -767,6 +796,8 @@ function groupBlock(g, counts) {
       (g.i18n ? (L[g.i18n] || g.label || g.name) : (g.label || g.name))) +
     ' <span class="cnt">' + (counts[g.name] || 0) + '</span></label></div>' +
     (g.desc_title ? '<div class="gtitle">' + esc(g.desc_title) + '</div>' : '') +
+    // data attribution: always visible, unlike desc (Details block)
+    (g.attrib ? '<div class="attrib">' + esc(g.attrib) + '</div>' : '') +
     // zone-type toggles: full names in a two-column grid, color-coded
     (g.zones && g.zones.length ? '<div class="zgrid">' +
       g.zones.map(z => '<span class="zrow' +
@@ -774,9 +805,7 @@ function groupBlock(g, counts) {
         '" data-zone="' + esc(z.sym) + '" data-group="' + esc(g.name) +
         '"><i class="zsw" style="background:' + z.color + '"></i>' +
         esc(z.title) + '</span>').join('') + '</div>' : '') +
-    // streets are toggle-only; everything else keeps the opacity slider
-    (g.kind === 'streets' ? '' :
-      range('alpha', L.opacity, '0.05', '1', '0.01', st.alpha)) +
+    range('alpha', L.opacity, '0.05', '1', '0.01', st.alpha) +
     (g.desc ? '<details class="gdetails"><summary>' + L.details + '</summary><div>' +
       esc(g.desc) + '</div></details>' : '') +
     '</div>';
@@ -1263,22 +1292,30 @@ def build_map_payload(features, schema, prop, zone_mapping,
     if not 0 <= hatch["fill"] <= 1:
         raise ValueError("hatch fill must be a number in [0, 1]")
 
-    # hovered-zone outline style: app-level only (from settings.json), no UI
+    # hovered-zone outline style: app-level only (from settings.json), no
+    # UI. Only the provided keys travel in the payload; the page's
+    # built-in highlight defaults cover the rest, so settings.json is
+    # the single config source for this style (no parallel defaults)
     hlight = highlight or {}
-    try:
-        to_rgb(hlight.get("color", "#111111"))
-    except (ValueError, TypeError):
-        raise ValueError("highlight color must be a valid color")
-    highlight = {
-        "color": hlight.get("color", "#111111"),
-        "width": float(hlight.get("width", 3.5)),
-        "dash": [float(v) for v in hlight.get("dash", (16.0, 12.0))],
-    }
-    if highlight["width"] <= 0:
-        raise ValueError("highlight width must be positive")
-    if len(highlight["dash"]) < 2 or not all(v > 0 for v in highlight["dash"]):
-        raise ValueError("highlight dash must be two or more positive "
-                         "numbers (px, on/off pattern)")
+    if not isinstance(hlight, dict):
+        raise ValueError("highlight must be an object")
+    highlight = {}
+    if "color" in hlight:
+        try:
+            to_rgb(hlight["color"])
+        except (ValueError, TypeError):
+            raise ValueError("highlight color must be a valid color")
+        highlight["color"] = hlight["color"]
+    if "width" in hlight:
+        highlight["width"] = float(hlight["width"])
+        if highlight["width"] <= 0:
+            raise ValueError("highlight width must be positive")
+    if "dash" in hlight:
+        highlight["dash"] = [float(v) for v in hlight["dash"]]
+        if (len(highlight["dash"]) < 2
+                or not all(v > 0 for v in highlight["dash"])):
+            raise ValueError("highlight dash must be two or more positive "
+                             "numbers (px, on/off pattern)")
 
     if overlay:
         # the original per-layer colors form individually controllable
@@ -1400,13 +1437,15 @@ def build_map_payload(features, schema, prop, zone_mapping,
         "groups": groups,
         "features": entries,
         "hatch": hatch,
-        "highlight": highlight,
+        "highlight": highlight or None,
     }
     if streets:
         # streets are not a color group feature; add their group for the UI
         payload["groups"].append({"name": "streets", "label": "Streets",
                                   "color": "#5a5a5a",
                                   "edge": "#3a3a3a", "alpha": 0.85,
+                                  "attrib": "© OpenStreetMap contributors "
+                                            "(ODbL)",
                                   "kind": "streets"})
         web_streets = []
         for s in streets:
@@ -1451,8 +1490,8 @@ def build_map_payload(features, schema, prop, zone_mapping,
                                   "color": "#add19e",
                                   "edge": "#7aa86e", "alpha": 0.75,
                                   "kind": "layer",
-                                  "desc": "© OpenStreetMap contributors "
-                                          "(ODbL)"})
+                                  "attrib": "© OpenStreetMap contributors "
+                                            "(ODbL)"})
         web_greens = []
         for g in greens:
             part = []
