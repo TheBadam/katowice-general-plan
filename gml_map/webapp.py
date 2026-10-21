@@ -214,6 +214,11 @@ let greenMin = 64;    // texture tile size (px) at the fit zoom - also the
                       // floor when zoomed out
 let greenMax = 256;   // texture tile size (px) cap at deep zoom
 let fitScale = 1;     // view.s at the fit zoom: the texture reference
+let greenAnchor = {x: 0, y: 0};  // world point the greens tile grid is
+                                 // pinned to: kept across pans (their
+                                 // phase must not change), re-pinned to
+                                 // the screen center on zoom changes
+let greenAnchorS = null;         // view.s the anchor was pinned at
 const greenPatternCache = {};  // cls -> pattern (one raster size at a time)
 const greenPatternT = {};      // cls -> raster px the pattern was built at
 function greenPattern(cls) {
@@ -282,9 +287,17 @@ function greenPattern(cls) {
     greenPatternCache[cls] = pat;
     greenPatternT[cls] = t;
   }
-  // scale pattern px -> world units so the tile covers T screen px
+  // map pattern px into the space the engine actually uses, so the tile
+  // always covers T screen px. Spec engines: cancel the world transform
+  // (the negative y mirrors its y-flip) and pin the tile grid to the
+  // world anchor; device-space engines: map straight to device pixels,
+  // pinned to the anchor's on-screen position (no y-flip to mirror)
   const m = T / (t * view.s);
-  pat.setTransform(new DOMMatrix([m, 0, 0, -m, 0, 0]));
+  pat.setTransform(patternsInDeviceSpace()
+    ? new DOMMatrix([m * view.s * dpr, 0, 0, m * view.s * dpr,
+                     (greenAnchor.x * view.s + view.tx) * dpr,
+                     (view.ty - greenAnchor.y * view.s) * dpr])
+    : new DOMMatrix([m, 0, 0, -m, greenAnchor.x, greenAnchor.y]));
   return pat;
 }
 const zoneTitles = {};   // zone symbol -> full title (e.g. SI -> Strefa ...)
@@ -337,14 +350,40 @@ function darkenHex(h) {
   const f = c => Math.round(parseInt(c, 16) * 0.6);
   return 'rgb(' + f(h.slice(0, 2)) + ',' + f(h.slice(2, 4)) + ',' + f(h.slice(4, 6)) + ')';
 }
+// --- pattern-transform semantics -------------------------------------
+// Per spec, CanvasPattern.setTransform maps pattern pixels into user
+// space, composed with the CTM at fill time. Some engines (WebKit)
+// instead apply it directly in device space. The hatch and greens
+// patterns depend on the exact placement, so detect the behavior once
+// and adapt: spec engines get transforms that cancel the drawing CTM,
+// device-space engines get plain device-space mappings.
+let PATTERNS_DEVICE = null;
+function patternsInDeviceSpace() {
+  if (PATTERNS_DEVICE !== null) return PATTERNS_DEVICE;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = 4;
+  const c2 = cv.getContext('2d');
+  const tile = document.createElement('canvas');
+  tile.width = tile.height = 2;
+  const t2 = tile.getContext('2d');
+  t2.fillStyle = '#000';
+  t2.fillRect(0, 0, 1, 1);
+  c2.setTransform(2, 0, 0, 2, 0, 0);  // user space is half the device
+  c2.fillStyle = c2.createPattern(tile, 'repeat');
+  c2.fillRect(0, 0, 2, 2);
+  // spec: the black user cell covers device pixels (0..2, 0..2);
+  // device semantics: it stays a single device pixel
+  PATTERNS_DEVICE = c2.getImageData(1, 1, 1, 1).data[3] === 0;
+  return PATTERNS_DEVICE;
+}
 // 45-degree hatch patterns for group overlays: colored "/" lines on a
 // transparent background. Line thickness and spacing (CSS px) come from
 // the app configuration (HATCH); tile spacing is spacing*sqrt(2) so the
 // line distance equals the configured value. Anchored to the screen via
-// the inverse of the current view transform, so line width and spacing
-// stay constant while panning and zooming.
+// the inverse of the *drawing context's* current view transform, so line
+// width and spacing stay constant while panning and zooming.
 const hatchCache = {};
-function hatchPattern(color, widthPx, spacingPx) {
+function hatchPattern(c, color, widthPx, spacingPx) {
   const key = color + '|' + widthPx + '|' + spacingPx + '|' + dpr;
   let pat = hatchCache[key];
   if (!pat) {
@@ -359,10 +398,14 @@ function hatchPattern(color, widthPx, spacingPx) {
     t.moveTo(-2, s / 2 + 2); t.lineTo(s / 2 + 2, -2);
     t.moveTo(s / 2 - 2, s + 2); t.lineTo(s + 2, s / 2 - 2);
     t.stroke();
-    pat = ctx.createPattern(tile, 'repeat');
+    pat = c.createPattern(tile, 'repeat');
     hatchCache[key] = pat;
   }
-  pat.setTransform(ctx.getTransform().inverse());
+  // cancel the drawing context's world transform under spec semantics;
+  // device-space engines already place the pattern in device space
+  pat.setTransform(patternsInDeviceSpace()
+    ? new DOMMatrix()
+    : c.getTransform().inverse());
   return pat;
 }
 // --- shareable view state in the URL --------------------------------
@@ -487,6 +530,38 @@ function initGroups() {
     state[g.name] = s;
   }
 }
+function simplifyRing(r, tol) {
+  // Douglas-Peucker on a flat [x0, y0, x1, y1, ...] ring, kept closed;
+  // returns the input unchanged when the result would degenerate
+  const n = r.length / 2;
+  if (n < 4) return r;
+  const keep = new Uint8Array(n);
+  keep[0] = keep[n - 1] = 1;
+  const stack = [[0, n - 1]];
+  while (stack.length) {
+    const seg = stack.pop(), i0 = seg[0], i1 = seg[1];
+    const x0 = r[2 * i0], y0 = r[2 * i0 + 1];
+    const dx = r[2 * i1] - x0, dy = r[2 * i1 + 1] - y0;
+    const len = Math.hypot(dx, dy) || 1e-12;
+    let dmax = -1, imax = -1;
+    for (let i = i0 + 1; i < i1; i++) {
+      const d = Math.abs(dy * (r[2 * i] - x0) -
+                         dx * (r[2 * i + 1] - y0)) / len;
+      if (d > dmax) { dmax = d; imax = i; }
+    }
+    if (dmax > tol) {
+      keep[imax] = 1;
+      stack.push([i0, imax], [imax, i1]);
+    }
+  }
+  const out = [];
+  for (let i = 0; i < n; i++)
+    if (keep[i]) { out.push(r[2 * i], r[2 * i + 1]); }
+  if (out.length >= 6 && (out[0] !== out[out.length - 2] ||
+                          out[1] !== out[out.length - 1]))
+    out.push(out[0], out[1]);
+  return out.length >= 6 ? out : r;
+}
 function makePath(f) {
   const entry = {g: f.g, bc: f.bc, be: f.be || null, bg: f.bg,
                  layer: f.layer, ozn: f.ozn,
@@ -511,6 +586,37 @@ function makePath(f) {
     for (let i = 2; i < r.length; i += 2) { p.lineTo(r[i], r[i+1]); upd(r[i], r[i+1]); }
   }
   entry.p = p; entry.b = [minx, miny, maxx, maxy];
+  if (f.t !== 'pt' && DATA.bounds) {
+    // zoom-dependent LOD: two precomputed simplifications, used by the
+    // renderer while their worst-case screen error stays under a pixel
+    // (see lodPath); hover outlines and hit-testing keep the exact path
+    const diag = Math.max(DATA.bounds[2], DATA.bounds[3]) || 1;
+    entry.lods = [];
+    for (const tol of [diag / 4000, diag / 500]) {
+      const lp = new Path2D();
+      let any = false;
+      if (f.t === 'p') {
+        for (const part of f.parts) {
+          for (let ri = 0; ri < part.length; ri++) {
+            const r = simplifyRing(part[ri], tol);
+            if (r.length < 6) continue;
+            lp.moveTo(r[0], r[1]);
+            for (let i = 2; i < r.length; i += 2) lp.lineTo(r[i], r[i+1]);
+            lp.closePath();
+            any = true;
+          }
+        }
+      } else {
+        const r = simplifyRing(f.parts[0][0], tol);
+        if (r.length >= 4) {
+          lp.moveTo(r[0], r[1]);
+          for (let i = 2; i < r.length; i += 2) lp.lineTo(r[i], r[i+1]);
+          any = true;
+        }
+      }
+      if (any) entry.lods.push({tol: tol, p: lp});
+    }
+  }
   return entry;
 }
 function resize() {
@@ -528,6 +634,7 @@ function fit() {
   fitScale = s;  // greens texture reference zoom (see greenPattern)
   view.tx = (w - s * (minx + maxx)) / 2;
   view.ty = (h + s * (miny + maxy)) / 2;
+  offView = null;  // fit is a view jump: render the next frame crisp
 }
 function zoneTypeOff(sym) {
   // a zone type counts as off when a *visible* zone-toggle group (the
@@ -541,17 +648,39 @@ function zoneTypeOff(sym) {
   }
   return false;
 }
-function draw() {
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.setTransform(view.s * dpr, 0, 0, -view.s * dpr, view.tx * dpr, view.ty * dpr);
-  ctx.lineJoin = 'round';
+function visibleRect() {
   // viewport culling: only draw features intersecting the visible world rect
   const vw = canvas.width / dpr, vh = canvas.height / dpr;
   const vx0 = -view.tx / view.s, vx1 = (vw - view.tx) / view.s;
   const vy0 = (view.ty - vh) / view.s, vy1 = view.ty / view.s;
-  const visible = b =>
-    b[2] >= vx0 && b[0] <= vx1 && b[3] >= vy0 && b[1] <= vy1;
+  return b => b[2] >= vx0 && b[0] <= vx1 && b[3] >= vy0 && b[1] <= vy1;
+}
+function lodPath(pf) {
+  // coarsest precomputed simplification (see makePath) whose worst-case
+  // screen error stays under ~0.75 px; the exact path once zoomed in
+  const lods = pf.lods;
+  if (!lods) return pf.p;
+  for (let i = lods.length - 1; i >= 0; i--)
+    if (lods[i].tol * view.s <= 0.75) return lods[i].p;
+  return pf.p;
+}
+// --- offscreen scene cache --------------------------------------------
+// Zone fills, hatches, greens, borders and streets are expensive to
+// rasterize but static between gestures: they render into an offscreen
+// canvas at rest and every frame just blits it. A content change
+// (toggle/alpha/data) re-renders at once; a view change mid-gesture
+// blits the cached frame shifted/scaled and re-renders crisp once the
+// view settles (~120 ms after the last change). A hover frame with the
+// view at rest costs a 1:1 blit plus the dashed outline and labels.
+let offCv = null;        // offscreen canvas holding the static scene
+let offView = null;      // {s, tx, ty} the cache was rendered with
+let offSig = null;       // scene fingerprint the cache was rendered with
+let settleTimer = null;  // crisp re-render once a gesture pauses
+function sceneSig() {
+  return JSON.stringify(state) + (greensPaths ? '|g' : '');
+}
+function renderStatic(c, visible) {
+  const ctx = c;  // the passes below draw into the offscreen canvas
   // base pass: every feature in its base color, controlled by its base group
   for (const pf of paths) {
     const st = state[pf.bg];
@@ -563,18 +692,18 @@ function draw() {
       // opacity slider scales this initial level
       ctx.globalAlpha = st.alpha * (pf.ba === undefined ? 1 : pf.ba);
       ctx.fillStyle = pf.bc;
-      ctx.fill(pf.p, 'evenodd');
+      ctx.fill(lodPath(pf), 'evenodd');
       if (!pf.be) {  // zone borders are stroked in a separate top pass
         ctx.globalAlpha = Math.min(1, st.alpha + 0.2);
         ctx.strokeStyle = darkenHex(pf.bc);
         ctx.lineWidth = 1 / view.s;
-        ctx.stroke(pf.p);
+        ctx.stroke(lodPath(pf));
       }
     } else if (pf.t === 'l') {
       ctx.globalAlpha = 1;
       ctx.strokeStyle = pf.be || darkenHex(pf.bc);
       ctx.lineWidth = 1.4 / view.s;
-      ctx.stroke(pf.p);
+      ctx.stroke(lodPath(pf));
     } else {
       ctx.globalAlpha = 1;
       ctx.fillStyle = pf.bc;
@@ -599,20 +728,20 @@ function draw() {
       if (HATCH.fill > 0) {  // optional solid fill between the lines
         ctx.globalAlpha = HATCH.fill * st.alpha;
         ctx.fillStyle = gr.color;
-        ctx.fill(pf.p, 'evenodd');
+        ctx.fill(lodPath(pf), 'evenodd');
       }
       ctx.globalAlpha = st.alpha;
-      ctx.fillStyle = hatchPattern(gr.color, HATCH.width, HATCH.spacing);
-      ctx.fill(pf.p, 'evenodd');
+      ctx.fillStyle = hatchPattern(ctx, gr.color, HATCH.width, HATCH.spacing);
+      ctx.fill(lodPath(pf), 'evenodd');
       ctx.globalAlpha = st.alpha;
       ctx.strokeStyle = gr.edge;
       ctx.lineWidth = 1 / view.s;
-      ctx.stroke(pf.p);
+      ctx.stroke(lodPath(pf));
     } else if (pf.t === 'l') {
       ctx.globalAlpha = st.alpha;
       ctx.strokeStyle = gr.edge;
       ctx.lineWidth = 1.4 / view.s;
-      ctx.stroke(pf.p);
+      ctx.stroke(lodPath(pf));
     } else {
       ctx.globalAlpha = st.alpha;
       ctx.fillStyle = gr.color;
@@ -650,9 +779,82 @@ function draw() {
     ctx.globalAlpha = 1;
     ctx.strokeStyle = pf.be;
     ctx.lineWidth = 0.6 / view.s;
-    ctx.stroke(pf.p);
+    ctx.stroke(lodPath(pf));
   }
-  // hovered (or pinned) zone: dashed outline on top of all zone rendering
+  const stS = state['streets'];
+  if (stS && stS.on && streetsPath) {
+    ctx.globalAlpha = stS.alpha;
+    ctx.strokeStyle = groups['streets'].edge;
+    ctx.lineWidth = 1.1 / view.s;
+    ctx.stroke(streetsPath);
+  }
+  ctx.globalAlpha = 1;
+}
+function renderScene() {
+  // full re-render of the static scene into the cache, at the view now
+  // pin the greens tile grid: kept across pans (a pan re-render must
+  // not shift the texture phase), but re-pinned to the screen center
+  // whenever the zoom changes - with a growth rate below 1 the tile's
+  // ground size changes per zoom step, and pinning that rescale to the
+  // middle of the view keeps the drift near zero where the user looks
+  // instead of sliding relative to the distant map origin
+  if (greenAnchorS !== view.s) {
+    greenAnchorS = view.s;
+    greenAnchor = {
+      x: (canvas.clientWidth / 2 - view.tx) / view.s,
+      y: (view.ty - canvas.clientHeight / 2) / view.s};
+  }
+  const c = offCv.getContext('2d');
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.clearRect(0, 0, offCv.width, offCv.height);
+  c.setTransform(view.s * dpr, 0, 0, -view.s * dpr, view.tx * dpr, view.ty * dpr);
+  renderStatic(c, visibleRect());
+  offView = {s: view.s, tx: view.tx, ty: view.ty};
+  offSig = sceneSig();
+}
+function draw() {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (!offCv || offCv.width !== canvas.width ||
+      offCv.height !== canvas.height) {
+    offCv = document.createElement('canvas');
+    offCv.width = canvas.width;
+    offCv.height = canvas.height;
+    offView = null;  // fresh cache: force a crisp render below
+  }
+  if (offView === null || offSig !== sceneSig()) {
+    renderScene();  // content or canvas size changed: render crisp now
+  } else if (view.s !== offView.s || view.tx !== offView.tx ||
+             view.ty !== offView.ty) {
+    // mid-gesture: the blit below keeps the frame cheap, but it scales
+    // the whole cached frame, while the hatch and greens render at their
+    // own scale (screen-space / gentle growth) - so a far-drifted blit
+    // visibly diverges from a crisp render and then snaps back. Re-render
+    // as soon as the zoom drifts past ~25%, else once the gesture pauses
+    const k = view.s / offView.s;
+    if (k > 1.25 || k < 0.8) {
+      renderScene();
+    } else {
+      clearTimeout(settleTimer);
+      settleTimer = setTimeout(() => {
+        settleTimer = null;
+        renderScene();
+        draw();
+      }, 60);
+    }
+  }
+  // blit the cached scene under the current view (device pixel space);
+  // k/ax/ay map the cached frame's pixels onto the current transform
+  // (note the minus on ay: the world transform flips y)
+  const k = view.s / offView.s;
+  const ax = view.tx - k * offView.tx;
+  const ay = view.ty - k * offView.ty;
+  ctx.drawImage(offCv, ax * dpr, ay * dpr, offCv.width * k, offCv.height * k);
+  // dynamic on top of the cached scene: the dashed hover/pinned outline
+  // and street labels, which track the view on every frame
+  const visible = visibleRect();
+  ctx.setTransform(view.s * dpr, 0, 0, -view.s * dpr, view.tx * dpr, view.ty * dpr);
+  ctx.lineJoin = 'round';
   if (hoverPf && visible(hoverPf.b)) {
     ctx.globalAlpha = 1;
     ctx.strokeStyle = HIGHLIGHT.color;
@@ -663,14 +865,9 @@ function draw() {
     ctx.setLineDash([]);
   }
   const stS = state['streets'];
-  if (stS && stS.on && streetsPath) {
-    ctx.globalAlpha = stS.alpha;
-    ctx.strokeStyle = groups['streets'].edge;
-    ctx.lineWidth = 1.1 / view.s;
-    ctx.stroke(streetsPath);
-  }
   ctx.globalAlpha = (stS && stS.on) ? stS.alpha : 1;
   if (stS && stS.on) drawStreetLabels(visible);
+  ctx.globalAlpha = 1;
 }
 function drawStreetLabels(visible) {
   // draw in CSS pixels: scale the backing store by dpr (devicePixelRatio)

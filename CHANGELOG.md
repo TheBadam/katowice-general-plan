@@ -10,6 +10,7 @@
   zakotwiczona w terenie — nie przesuwa się względem mapy podczas
   przesuwania widoku. Kafel tekstury delikatnie rośnie wraz ze
   zbliżeniem: od 64 px przy widoku całego planu do maksimum 256 px.
+- Poprawa płynności, znany problem ze zmiennym rozmiarem tekstur i kreskowania grup.
 
 ## 2026-10-18
 
