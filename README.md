@@ -123,7 +123,9 @@ PNG with `-o map.png` in the same command.
 All viewer UI labels (panel section headers, buttons, tooltips, the load
 error message) live in one config file, `i18n.json`, passed with `--i18n`;
 it is the single source of truth for labels - the viewer has no built-in
-set, so `--i18n` is required for `--export-static`. Page links translate
+set, so `--i18n` is required for `--export-static`. The page script itself
+lives in `viewer/src/main.js`; the export copies it into the site as
+`viewer.js` (see `viewer/README.md`). Page links translate
 as well: a `--page-link KEY=URL` entry shows
 the current language's `link.KEY` label from `i18n.json`, falling back to
 the raw name when there is no such entry. The language still follows the
